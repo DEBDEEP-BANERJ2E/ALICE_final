@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 GAMMA = 0.99
 LAMBDA_JUDGE = 0.8
+MIN_BASE_REWARD = 0.01  # prevents degenerate all-zero episodes that starve gradient signal
 
 
 class RewardFunction:
@@ -134,4 +135,7 @@ class RewardFunction:
             )
 
         raw -= novelty_penalty
+        # Guarantee non-zero reward so gradient signal is never completely absent
+        if raw == 0.0:
+            raw = MIN_BASE_REWARD
         return max(-1.0, min(1.0, raw))

@@ -4,12 +4,21 @@
 # Usage:
 #   HF_SPACE_ID=your-username/alice-rl-environment HF_TOKEN=hf_... bash scripts/deploy_spaces.sh
 #
+#   Rollback to a previous revision:
+#   ROLLBACK_SHA=<commit-sha> HF_SPACE_ID=... HF_TOKEN=... bash scripts/deploy_spaces.sh --rollback
+#
 # Environment variables:
-#   HF_SPACE_ID   (required) Format: <username>/<space-name>
-#   HF_TOKEN      (required) Hugging Face write token
-#   POLL_TIMEOUT  (optional) Seconds to wait for Space to become healthy (default: 600)
-#   ENV_FILE      (optional) Path to .env file to write ALICE_ENV_URL (default: .env)
+#   HF_SPACE_ID    (required) Format: <username>/<space-name>
+#   HF_TOKEN       (required) Hugging Face write token
+#   POLL_TIMEOUT   (optional) Seconds to wait for Space to become healthy (default: 600)
+#   ENV_FILE       (optional) Path to .env file to write ALICE_ENV_URL (default: .env)
+#   ROLLBACK_SHA   (required for --rollback) Commit SHA to roll back to
 set -euo pipefail
+
+ROLLBACK_MODE=false
+for arg in "$@"; do
+    [ "$arg" = "--rollback" ] && ROLLBACK_MODE=true
+done
 
 # ── Validate inputs ────────────────────────────────────────────────────────────
 : "${HF_SPACE_ID:?HF_SPACE_ID must be set (format: username/space-name)}"
@@ -35,7 +44,7 @@ require_cmd() {
 }
 
 # ── Pre-flight checks ──────────────────────────────────────────────────────────
-require_cmd huggingface-cli
+require_cmd hf
 require_cmd curl
 
 log "Deploying ALICE RL Environment"
@@ -44,39 +53,112 @@ log "  Space URL: $SPACE_URL"
 
 # Authenticate
 log "Authenticating with Hugging Face..."
-alice_env/.venv/bin/hf auth login --token "$HF_TOKEN" 2>/dev/null || true
+hf auth login --token "$HF_TOKEN" 2>/dev/null || true
+
+# ── Rollback mode ─────────────────────────────────────────────────────────────
+if [ "$ROLLBACK_MODE" = "true" ]; then
+    : "${ROLLBACK_SHA:?ROLLBACK_SHA must be set when using --rollback}"
+    log "ROLLBACK MODE: reverting Space '$HF_SPACE_ID' to commit $ROLLBACK_SHA"
+    TMPDIR=$(mktemp -d)
+    log "Downloading revision $ROLLBACK_SHA to $TMPDIR..."
+    hf download \
+        "$HF_SPACE_ID" \
+        --repo-type space \
+        --revision "$ROLLBACK_SHA" \
+        --token "$HF_TOKEN" \
+        --local-dir "$TMPDIR"
+    log "Re-uploading revision $ROLLBACK_SHA to Space..."
+    .venv/bin/python - <<PYEOF
+import os
+from huggingface_hub import HfApi
+api = HfApi()
+api.upload_folder(
+    folder_path="$TMPDIR",
+    repo_id="$HF_SPACE_ID",
+    repo_type="space",
+    token="$HF_TOKEN",
+    commit_message="Rollback to $ROLLBACK_SHA",
+)
+PYEOF
+    rm -rf "$TMPDIR"
+    log "Rollback push complete. Space is rebuilding..."
+else
 
 # ── Step 1: Create Space (idempotent) ─────────────────────────────────────────
 log "Creating Space '$HF_SPACE_ID' (skips if already exists)..."
-alice_env/.venv/bin/hf repo create "$HF_SPACE_ID" \
+hf repo create "$HF_SPACE_ID" \
     --type space \
     --space-sdk docker \
     --token "$HF_TOKEN" \
     --exist-ok \
     && log "Space ready." || log "Space creation skipped (already exists)."
 
-# ── Step 2: Push alice_env/ contents to the Space ─────────────────────────────
-# Resolve the directory containing this script, then find alice_env/
+# ── Step 2: Capture current HEAD SHA for rollback reference ───────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ALICE_ENV_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+PREV_SHA=$(.venv/bin/python -c "
+from huggingface_hub import HfApi
+import os, sys
+try:
+    api = HfApi()
+    commits = api.list_repo_commits(repo_id='$HF_SPACE_ID', repo_type='space', token='$HF_TOKEN')
+    print(commits[0].commit_id if commits else '')
+except Exception as e:
+    print('', file=sys.stderr)
+    print('')
+" 2>/dev/null) || PREV_SHA=""
+
+if [ -n "$PREV_SHA" ]; then
+    log "Previous HEAD SHA: $PREV_SHA (use ROLLBACK_SHA=$PREV_SHA to roll back)"
+fi
+
+# ── Step 3: Push alice_env/ contents to the Space ─────────────────────────────
 log "Pushing '$ALICE_ENV_DIR' to Space repository..."
-alice_env/.venv/bin/hf upload \
-    "$HF_SPACE_ID" \
-    "$ALICE_ENV_DIR" \
-    . \
-    --repo-type space \
-    --token "$HF_TOKEN" \
-    --commit-message "Deploy ALICE RL Environment [$(date -u '+%Y-%m-%dT%H:%M:%SZ')]" \
-    --exclude ".venv/**" \
-    --exclude ".pytest_cache/**" \
-    --exclude "__pycache__/**" \
-    --exclude "*.pyc" \
-    --exclude ".cache/**"
+.venv/bin/python - <<'PYEOF'
+import os, sys
+from huggingface_hub import HfApi
+
+api = HfApi()
+space_id = os.environ["HF_SPACE_ID"]
+token = os.environ["HF_TOKEN"]
+alice_env_dir = os.path.abspath(".")
+
+ignore_patterns = [
+    ".venv/**",
+    "**/.venv/**",
+    "__pycache__/**",
+    "**/__pycache__/**",
+    "*.pyc",
+    "**/*.pyc",
+    ".pytest_cache/**",
+    "**/.pytest_cache/**",
+    ".cache/**",
+    "**/.cache/**",
+    "*.egg-info/**",
+    "**/*.egg-info/**",
+    "uv.lock",
+    ".git/**",
+    "data/**",
+    "checkpoints/**",
+]
+
+print(f"Uploading {alice_env_dir} → {space_id} (excluding .venv and caches)...")
+api.upload_folder(
+    folder_path=alice_env_dir,
+    repo_id=space_id,
+    repo_type="space",
+    token=token,
+    ignore_patterns=ignore_patterns,
+    commit_message="Deploy ALICE RL Environment",
+)
+print("Upload complete.")
+PYEOF
 
 log "Push complete. Space is now building..."
+fi  # end rollback / normal-deploy branch
 
-# ── Step 3: Poll health endpoint ───────────────────────────────────────────────
+# ── Step 4: Poll health endpoint ───────────────────────────────────────────────
 log "Polling $SPACE_URL/health (timeout: ${POLL_TIMEOUT}s)..."
 POLL_INTERVAL=20
 ELAPSED=0
@@ -103,7 +185,7 @@ fi
 
 log "Space is healthy!"
 
-# ── Step 4: Verify three-component model ──────────────────────────────────────
+# ── Step 5: Verify three-component model ──────────────────────────────────────
 PASS=0
 FAIL=0
 
@@ -154,7 +236,7 @@ else
     check "Registry: registry.hf.space reachable (docker pull $REGISTRY_IMAGE)" "HTTP $REGISTRY_HTTP"
 fi
 
-# ── Step 5: Record canonical ALICE_ENV_URL ────────────────────────────────────
+# ── Step 6: Record canonical ALICE_ENV_URL ────────────────────────────────────
 log ""
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 log "  ALICE_ENV_URL = $SPACE_URL"

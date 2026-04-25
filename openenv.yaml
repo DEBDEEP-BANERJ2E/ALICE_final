@@ -1,0 +1,6 @@
+spec_version: 1
+name: alice_env
+type: space
+runtime: fastapi
+app: alice_server:app
+port: 7860

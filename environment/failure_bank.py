@@ -12,6 +12,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from dateutil import parser as _dateparser  # type: ignore
+
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -75,10 +77,25 @@ class FailureBank:
     def add_failure(self, failure: Dict[str, Any]) -> str:
         """Add a failed task with novelty scoring.
 
-        Returns the assigned failure_id.
+        If the failure is a near-duplicate of an existing entry (novelty ≤ 0.1),
+        the nearest neighbour's failure_frequency is incremented and its
+        repair_priority is updated instead of inserting a new entry.
+
+        Returns the failure_id (existing or newly created).
         """
         embedding = self._compute_embedding(failure.get("prompt", ""))
         novelty_score = self.compute_novelty_score({"embedding": embedding})
+
+        # Duplicate detected — boost frequency on the nearest existing entry
+        if novelty_score <= 0.1 and self._entries:
+            nearest_id = self._find_nearest_entry(embedding)
+            if nearest_id:
+                existing = self._entries[nearest_id]
+                existing.failure_frequency += 1
+                existing.repair_priority = existing.novelty_score * existing.failure_frequency
+                logger.debug("Duplicate failure; incremented frequency on %s to %d",
+                             nearest_id[:8], existing.failure_frequency)
+                return nearest_id
 
         failure_id = str(uuid.uuid4())
         entry = FailureBankEntry(
@@ -93,7 +110,7 @@ class FailureBank:
             trajectory=failure.get("trajectory"),
             novelty_score=novelty_score,
             semantic_embedding=embedding,
-            repair_priority=novelty_score,  # updated below
+            repair_priority=novelty_score,
         )
 
         self._entries[failure_id] = entry
@@ -151,15 +168,46 @@ class FailureBank:
         time_range: Optional[Tuple[str, str]] = None,
         novelty_threshold: Optional[float] = None,
     ) -> List[FailureBankEntry]:
-        """Query failures by multiple criteria."""
+        """Query failures by multiple criteria.
+
+        time_range: (start_iso, end_iso) — both ends inclusive.
+        """
         results = list(self._entries.values())
         if error_type:
             results = [e for e in results if e.error_type == error_type]
         if agent_version:
             results = [e for e in results if e.agent_version == agent_version]
+        if time_range is not None:
+            try:
+                range_start = _dateparser.parse(time_range[0])
+                range_end = _dateparser.parse(time_range[1])
+                filtered = []
+                for e in results:
+                    try:
+                        ts = _dateparser.parse(e.timestamp)
+                        if range_start <= ts <= range_end:
+                            filtered.append(e)
+                    except Exception:
+                        pass
+                results = filtered
+            except Exception as exc:
+                logger.warning("time_range parse error (%s) — skipping time filter", exc)
         if novelty_threshold is not None:
             results = [e for e in results if e.novelty_score >= novelty_threshold]
         return results
+
+    def update_repair_status(self, failure_id: str, status: str) -> bool:
+        """Update the repair_status of a failure entry.
+
+        Returns True if the entry was found and updated, False otherwise.
+        """
+        entry = self._entries.get(failure_id)
+        if entry is None:
+            logger.warning("update_repair_status: failure_id %s not found", failure_id[:8])
+            return False
+        entry.repair_status = status
+        logger.info("Failure %s repair_status → %s", failure_id[:8], status)
+        return True
 
     def get_failure_distribution(self) -> Dict[str, Any]:
         """Return failure distribution metrics for dashboard display."""
@@ -192,6 +240,15 @@ class FailureBank:
             # Fallback to deterministic hash-based embedding when model unavailable
             rng = np.random.default_rng(abs(hash(text)) % (2**32))
             return rng.random(768).astype(np.float32)
+
+    def _find_nearest_entry(self, embedding: np.ndarray) -> Optional[str]:
+        """Return the failure_id of the entry with highest cosine similarity to embedding."""
+        if not self._entries:
+            return None
+        existing = np.stack([e.semantic_embedding for e in self._entries.values()])
+        ids = list(self._entries.keys())
+        sims = self._cosine_similarity_batch(embedding, existing)
+        return ids[int(np.argmax(sims))]
 
     def _update_repair_queue(self, entry: FailureBankEntry) -> None:
         """Add entry to repair queue if novelty is high enough."""

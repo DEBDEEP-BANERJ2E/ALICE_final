@@ -18,6 +18,10 @@ TIMEOUT="${TIMEOUT:-15}"
 # Strip trailing slash
 ALICE_ENV_URL="${ALICE_ENV_URL%/}"
 
+# Derive username and space name from HF_SPACE_ID if set
+HF_USERNAME="${HF_SPACE_ID%%/*}"
+SPACE_NAME="${HF_SPACE_ID##*/}"
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 PASS=0
 FAIL=0
@@ -116,7 +120,8 @@ fi
 log "── Component 3: Registry ────────────────────────────────────────────────────"
 
 if [ -n "${HF_SPACE_ID:-}" ]; then
-    REGISTRY_IMAGE="registry.hf.space/${HF_SPACE_ID}:latest"
+    # Registry format: registry.hf.space/<username>-<space-name> (dash, not slash)
+    REGISTRY_IMAGE="registry.hf.space/${HF_USERNAME}-${SPACE_NAME}:latest"
     # 401 = auth required (registry is up), 200 = open ping endpoint
     check_url_reachable "HF registry reachable (https://registry.hf.space/v2/)" \
         "https://registry.hf.space/v2/"

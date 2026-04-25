@@ -13,6 +13,7 @@ import os
 import time
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Deque, Dict, Optional
 
@@ -68,6 +69,21 @@ def _get_components():
     return _episode_handler, _curriculum_manager, _task_generator, _reward_function, _verifier_stack, _failure_bank
 
 
+# Thread pool for non-blocking background work (failure bank insertions, etc.)
+_bg_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="alice-bg")
+
+
+def _prewarm_sentence_transformer():
+    """Pre-load the sentence-transformer model so the first /step call isn't slow."""
+    try:
+        from environment.failure_bank import FailureBank
+        _fb = FailureBank()
+        _fb._compute_embedding("warmup")
+        logger.info("Sentence-transformer pre-warmed successfully")
+    except Exception as exc:
+        logger.warning("Sentence-transformer pre-warm failed (non-fatal): %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
@@ -80,6 +96,7 @@ _latency_window: Deque[float] = deque(maxlen=200)
 _error_count = 0
 _request_count = 0
 _episode_history: list = []
+_episode_rewards: dict = {}      # episode_id → accumulated reward (live, updated each step)
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -96,6 +113,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 
 api.add_middleware(RequestLoggingMiddleware)
+
+
+@api.on_event("startup")
+async def _startup():
+    """Pre-warm heavy models in the background so the first request is fast."""
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(_bg_executor, _prewarm_sentence_transformer)
 api.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -152,25 +176,64 @@ async def reset() -> ResetResponse:
     initial_state = episode_handler.initialize_episode(episode_id=episode_id, agent_version=agent_version, task=task)
     async with _state_lock:
         _current_state.update({"episode_id": episode_id, "turn_number": 1, "task": task, "agent_version": agent_version})
-    _episode_history.append({"episode_id": episode_id, "task": task[:80], "timestamp": initial_state["timestamp"], "difficulty": task_info.get("difficulty_score", 0)})
+    _episode_history.append({"episode_id": episode_id, "task": task[:80], "timestamp": initial_state["timestamp"], "difficulty": task_info.get("difficulty_score", 0), "reward": None})
     if len(_episode_history) > 100:
         _episode_history.pop(0)
+    _episode_rewards[episode_id] = 0.0
     return ResetResponse(episode_id=episode_id, timestamp=initial_state["timestamp"], task=task, agent_version=agent_version)
 
 
 @api.post("/step", response_model=StepResponse)
 async def step(request: StepRequest) -> StepResponse:
-    episode_handler, _, _, reward_function, verifier_stack, _ = _get_components()
+    episode_handler, curriculum_manager, _, reward_function, verifier_stack, _ = _get_components()
     async with _state_lock:
         current_episode_id = _current_state.get("episode_id")
+        current_task = _current_state.get("task", "")
     if current_episode_id != request.episode_id:
         raise HTTPException(status_code=400, detail="Invalid episode_id")
+
     state, raw_reward, done, info = episode_handler.step(request.action)
-    verification = verifier_stack.verify(request.action, task=_current_state.get("task", ""))
+    verification = verifier_stack.verify(request.action, task=current_task)
     turn_number = info.get("turn", 1)
-    episode_data = {"turns": [{"turn_number": turn_number, "action": request.action, "verification": verification, "task_in_failure_bank": False, "times_task_attempted": turn_number, "total_tasks": 3, "prev_action": "", "discrimination_coverage_before": 0.0, "discrimination_coverage_after": 0.0}]}
+
+    # Real discrimination coverage from CurriculumManager
+    task_perf = {tid: {"success_rate": curriculum_manager.get_task_success_rate(tid)}
+                 for tid in curriculum_manager.task_performance}
+    zone_result = curriculum_manager.compute_discrimination_zone(task_perf)
+    disc_before = zone_result.get("coverage_pct", 0.0)
+
+    episode_data = {
+        "turns": [{
+            "turn_number": turn_number,
+            "action": request.action,
+            "verification": verification,
+            "task_in_failure_bank": False,
+            "times_task_attempted": turn_number,
+            "total_tasks": max(len(curriculum_manager.task_performance), 1),
+            "prev_action": "",
+            "discrimination_coverage_before": disc_before,
+            "discrimination_coverage_after": disc_before,
+        }]
+    }
     reward_result = reward_function.compute_reward(episode_data)
     reward = reward_result["shaped_rewards"][0] if reward_result["shaped_rewards"] else raw_reward
+
+    # Update curriculum with real verification outcome
+    composite = verification.get("composite_score", 0.0)
+    success = composite >= 0.5
+    task_id = current_task[:40]
+    curriculum_manager.update_task_performance(task_id, success=success)
+
+    # Accumulate reward for this episode so the dashboard can show real totals
+    eid = request.episode_id
+    _episode_rewards[eid] = _episode_rewards.get(eid, 0.0) + reward
+    if done:
+        # Write the final reward back into episode history
+        for entry in reversed(_episode_history):
+            if entry["episode_id"] == eid:
+                entry["reward"] = round(_episode_rewards.pop(eid, 0.0), 4)
+                break
+
     async with _state_lock:
         _current_state["turn_number"] = state.get("turn_number", turn_number + 1)
     return StepResponse(state=state, reward=reward, done=done, info={**info, "verification": verification})
@@ -205,14 +268,18 @@ def _heatmap_fig():
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(7, 3))
-    data = np.random.default_rng(42).random((5, 5)) if not _episode_history else np.clip(
-        np.array([[0.3 + 0.1 * i + 0.05 * j for j in range(5)] for i in range(5)]), 0, 1)
+    try:
+        _, cm, *_ = _get_components()
+        full = cm.get_curriculum_heatmap()   # (5, 10) real success rates
+        data = full[:, :5]                   # show first 5 tiers to fit the display
+    except Exception:
+        data = np.zeros((5, 5), dtype=np.float32)
     im = ax.imshow(data, cmap="RdYlGn", vmin=0, vmax=1, aspect="auto")
     ax.set_xticks(range(5))
     ax.set_xticklabels([f"Tier {i+1}" for i in range(5)], fontsize=8)
     ax.set_yticks(range(5))
     ax.set_yticklabels(["arithmetic", "logic", "factual", "symbolic", "code"], fontsize=8)
-    ax.set_title("Curriculum Heatmap (green=solving, red=struggling)", fontsize=9)
+    ax.set_title("Curriculum Heatmap — real success rates per domain/tier", fontsize=9)
     fig.colorbar(im, ax=ax, label="Success Rate")
     plt.tight_layout()
     return fig
@@ -267,15 +334,24 @@ def refresh_dashboard():
     mem = h.get("memory_usage", 0.0)
 
     ep_count = len(_episode_history)
-    disc = 0.3 + 0.05 * np.sin(ep_count * 0.3)
-    _disc_history.append(float(disc))
-    if len(_disc_history) > 100:
+
+    # Real discrimination zone coverage from CurriculumManager
+    try:
+        _, cm, *_ = _get_components()
+        task_perf = {tid: {"success_rate": cm.get_task_success_rate(tid)}
+                     for tid in cm.task_performance}
+        zone = cm.compute_discrimination_zone(task_perf)
+        disc = float(zone.get("coverage_pct", 0.0))
+    except Exception:
+        disc = 0.0
+    _disc_history.append(disc)
+    if len(_disc_history) > 200:
         _disc_history.pop(0)
 
-    if _episode_history:
-        _reward_hist.append(float(np.random.default_rng(ep_count).normal(0.3, 0.2)))
-        if len(_reward_hist) > 200:
-            _reward_hist.pop(0)
+    # Real rewards from completed episodes (episodes where done=True)
+    completed = [e["reward"] for e in _episode_history if e.get("reward") is not None]
+    _reward_hist.clear()
+    _reward_hist.extend(completed[-200:])
 
     ep_table = [[e["episode_id"][:8], e["task"][:50], e.get("difficulty", 0), e["timestamp"][:19]] for e in reversed(_episode_history[-10:])]
 

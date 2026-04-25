@@ -6,6 +6,12 @@ colorTo: purple
 sdk: docker
 app_port: 7860
 pinned: false
+hardware: t4-small
+secrets:
+  - OPENAI_API_KEY
+  - HF_TOKEN
+  - REFERENCE_MODEL_PRIMARY
+  - REFERENCE_MODEL_SECONDARY
 ---
 
 # ALICE — Adversarial Loop for Inter-model Co-evolutionary Environment
