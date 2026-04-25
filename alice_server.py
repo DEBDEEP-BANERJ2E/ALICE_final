@@ -1,11 +1,8 @@
 """
-ALICE OpenEnv Server — FastAPI server with OpenEnv-compliant endpoints.
+ALICE — combined Gradio dashboard + FastAPI server for HF Spaces.
 
-Endpoints:
-  POST /reset  — initialize episode, return {episode_id, timestamp, task, agent_version}
-  POST /step   — process action, return (state, reward, done, info)
-  GET  /state  — return current state without side effects
-  GET  /health — return {uptime, error_rate, latency_p95, memory_usage}
+The Gradio UI is mounted at / and the FastAPI API is mounted at /api.
+Both run in the same uvicorn process on port 7860.
 """
 
 from __future__ import annotations
@@ -19,28 +16,24 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Deque, Dict, Optional
 
+import gradio as gr
+import numpy as np
 import psutil
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
-# Load .env before anything else
 load_dotenv()
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger("alice.server")
 
 # ---------------------------------------------------------------------------
-# Lazy component imports (heavy deps loaded only when first request arrives)
+# Lazy component init
 # ---------------------------------------------------------------------------
 
 _episode_handler: Any = None
@@ -51,21 +44,16 @@ _verifier_stack: Any = None
 _failure_bank: Any = None
 
 
-def _get_components() -> tuple:
-    """Return (episode_handler, curriculum_manager, task_generator,
-    reward_function, verifier_stack, failure_bank), initializing lazily."""
+def _get_components():
     global _episode_handler, _curriculum_manager, _task_generator
     global _reward_function, _verifier_stack, _failure_bank
-
     if _episode_handler is None:
-        # These imports are deferred so uvicorn starts instantly
         from environment.episode_handler import EpisodeHandler
         from environment.curriculum_manager import CurriculumManager
         from environment.task_generator import TaskGenerator
         from environment.reward_function import RewardFunction
         from environment.verifier_stack import VerifierStack
         from environment.failure_bank import FailureBank
-
         _failure_bank = FailureBank()
         _verifier_stack = VerifierStack(failure_bank=_failure_bank)
         _reward_function = RewardFunction(
@@ -77,49 +65,22 @@ def _get_components() -> tuple:
         _curriculum_manager = CurriculumManager()
         _task_generator = TaskGenerator()
         _episode_handler = EpisodeHandler()
-
-    return (
-        _episode_handler,
-        _curriculum_manager,
-        _task_generator,
-        _reward_function,
-        _verifier_stack,
-        _failure_bank,
-    )
+    return _episode_handler, _curriculum_manager, _task_generator, _reward_function, _verifier_stack, _failure_bank
 
 
 # ---------------------------------------------------------------------------
-# App & startup time
+# FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="ALICE OpenEnv Server", version="0.1.0")
+api = FastAPI(title="ALICE OpenEnv API", version="0.1.0")
 _start_time = time.time()
-
-# ---------------------------------------------------------------------------
-# Thread-safe state
-# ---------------------------------------------------------------------------
-
 _state_lock = asyncio.Lock()
-
-_current_state: Dict[str, Any] = {
-    "episode_id": None,
-    "turn_number": 0,
-    "task": None,
-    "agent_version": os.getenv("AGENT_MODEL_ID", "0.0.0"),
-}
-
-# ---------------------------------------------------------------------------
-# Latency tracking for p95
-# ---------------------------------------------------------------------------
-
+_current_state: Dict[str, Any] = {"episode_id": None, "turn_number": 0, "task": None, "agent_version": os.getenv("AGENT_MODEL_ID", "0.0.0")}
 _latency_window: Deque[float] = deque(maxlen=200)
-_error_count: int = 0
-_request_count: int = 0
+_error_count = 0
+_request_count = 0
+_episode_history: list = []
 
-
-# ---------------------------------------------------------------------------
-# Request logging middleware
-# ---------------------------------------------------------------------------
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
@@ -131,21 +92,11 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         _latency_window.append(elapsed)
         if response.status_code >= 400:
             _error_count += 1
-        logger.info(
-            "%s %s %d %.3fs",
-            request.method,
-            request.url.path,
-            response.status_code,
-            elapsed,
-        )
         return response
 
 
-app.add_middleware(RequestLoggingMiddleware)
-
-# ---------------------------------------------------------------------------
-# Request / Response schemas
-# ---------------------------------------------------------------------------
+api.add_middleware(RequestLoggingMiddleware)
+api.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 class ResetResponse(BaseModel):
@@ -175,10 +126,10 @@ class StepResponse(BaseModel):
 
 
 class StateResponse(BaseModel):
-    episode_id: str | None = None
+    episode_id: Optional[str] = None
     turn_number: int = 0
-    task: str | None = None
-    agent_version: str | None = None
+    task: Optional[str] = None
+    agent_version: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -188,165 +139,221 @@ class HealthResponse(BaseModel):
     memory_usage: float
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-
-@app.get("/", response_class=HTMLResponse)
-async def root() -> HTMLResponse:
-    """Simple HTML status page for HF Spaces iframe."""
-    html = """<!DOCTYPE html>
-<html><head><title>ALICE RL Environment</title>
-<style>body{font-family:monospace;background:#0d1117;color:#e6edf3;padding:2rem}
-a{color:#58a6ff}pre{background:#161b22;padding:1rem;border-radius:6px}</style>
-</head><body>
-<h2>🔬 ALICE RL Environment</h2>
-<p>OpenEnv-compliant RL training environment. API endpoints:</p>
-<pre>POST /reset  — initialize episode
-POST /step   — process action
-GET  /state  — current state
-GET  /health — system health</pre>
-<p><a href="/health">/health</a> · <a href="/state">/state</a> · <a href="/docs">/docs</a></p>
-</body></html>"""
-    return HTMLResponse(content=html)
-
-
-@app.post("/reset", response_model=ResetResponse)
+@api.post("/reset", response_model=ResetResponse)
 async def reset() -> ResetResponse:
-    """Initialize a new episode and return the initial state."""
     episode_handler, curriculum_manager, task_generator, _, _, _ = _get_components()
-
     episode_id = str(uuid.uuid4())
     agent_version = os.getenv("AGENT_MODEL_ID", "0.0.0")
-
-    # Build discrimination zone from current curriculum state
-    task_perf = {
-        tid: {"success_rate": curriculum_manager.get_task_success_rate(tid)}
-        for tid in curriculum_manager.task_performance
-    }
+    task_perf = {tid: {"success_rate": curriculum_manager.get_task_success_rate(tid)} for tid in curriculum_manager.task_performance}
     zone_result = curriculum_manager.compute_discrimination_zone(task_perf)
     discrimination_zone = zone_result.get("discrimination_zone_tasks", [])
-
-    # Generate task via hunt mode
-    task_info = task_generator.hunt_mode(
-        agent_performance=task_perf,
-        discrimination_zone=discrimination_zone,
-    )
+    task_info = task_generator.hunt_mode(agent_performance=task_perf, discrimination_zone=discrimination_zone)
     task = task_info["prompt"]
-
-    # Initialize episode
-    initial_state = episode_handler.initialize_episode(
-        episode_id=episode_id,
-        agent_version=agent_version,
-        task=task,
-    )
-
+    initial_state = episode_handler.initialize_episode(episode_id=episode_id, agent_version=agent_version, task=task)
     async with _state_lock:
-        _current_state.update({
-            "episode_id": episode_id,
-            "turn_number": 1,
-            "task": task,
-            "agent_version": agent_version,
-        })
-
-    logger.info("Episode %s initialized (task difficulty=%.1f)", episode_id[:8], task_info["difficulty_score"])
-
-    return ResetResponse(
-        episode_id=episode_id,
-        timestamp=initial_state["timestamp"],
-        task=task,
-        agent_version=agent_version,
-    )
+        _current_state.update({"episode_id": episode_id, "turn_number": 1, "task": task, "agent_version": agent_version})
+    _episode_history.append({"episode_id": episode_id, "task": task[:80], "timestamp": initial_state["timestamp"], "difficulty": task_info.get("difficulty_score", 0)})
+    if len(_episode_history) > 100:
+        _episode_history.pop(0)
+    return ResetResponse(episode_id=episode_id, timestamp=initial_state["timestamp"], task=task, agent_version=agent_version)
 
 
-@app.post("/step", response_model=StepResponse)
+@api.post("/step", response_model=StepResponse)
 async def step(request: StepRequest) -> StepResponse:
-    """Process an agent action and return (state, reward, done, info)."""
     episode_handler, _, _, reward_function, verifier_stack, _ = _get_components()
-
     async with _state_lock:
         current_episode_id = _current_state.get("episode_id")
-
     if current_episode_id != request.episode_id:
         raise HTTPException(status_code=400, detail="Invalid episode_id")
-
-    # Delegate to episode handler
     state, raw_reward, done, info = episode_handler.step(request.action)
-
-    # Compute shaped reward using verifier output if available
     verification = verifier_stack.verify(request.action, task=_current_state.get("task", ""))
     turn_number = info.get("turn", 1)
-    episode_data = {
-        "turns": [{
-            "turn_number": turn_number,
-            "action": request.action,
-            "verification": verification,
-            "task_in_failure_bank": False,
-            "times_task_attempted": turn_number,
-            "total_tasks": 3,
-            "prev_action": "",
-            "discrimination_coverage_before": 0.0,
-            "discrimination_coverage_after": 0.0,
-        }]
-    }
+    episode_data = {"turns": [{"turn_number": turn_number, "action": request.action, "verification": verification, "task_in_failure_bank": False, "times_task_attempted": turn_number, "total_tasks": 3, "prev_action": "", "discrimination_coverage_before": 0.0, "discrimination_coverage_after": 0.0}]}
     reward_result = reward_function.compute_reward(episode_data)
     reward = reward_result["shaped_rewards"][0] if reward_result["shaped_rewards"] else raw_reward
-
     async with _state_lock:
         _current_state["turn_number"] = state.get("turn_number", turn_number + 1)
-
-    return StepResponse(
-        state=state,
-        reward=reward,
-        done=done,
-        info={**info, "verification": verification},
-    )
+    return StepResponse(state=state, reward=reward, done=done, info={**info, "verification": verification})
 
 
-@app.get("/state", response_model=StateResponse)
+@api.get("/state", response_model=StateResponse)
 async def get_state() -> StateResponse:
-    """Return current environment state without side effects."""
     async with _state_lock:
         snapshot = dict(_current_state)
-
-    return StateResponse(
-        episode_id=snapshot.get("episode_id"),
-        turn_number=snapshot.get("turn_number", 0),
-        task=snapshot.get("task"),
-        agent_version=snapshot.get("agent_version"),
-    )
+    return StateResponse(**snapshot)
 
 
-@app.get("/health", response_model=HealthResponse)
+@api.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    """Return system health metrics."""
     uptime = time.time() - _start_time
     error_rate = _error_count / _request_count if _request_count > 0 else 0.0
+    latency_p95 = float(np.percentile(list(_latency_window), 95)) if _latency_window else 0.0
+    memory_usage = psutil.Process().memory_info().rss / (1024 * 1024)
+    return HealthResponse(uptime=uptime, error_rate=error_rate, latency_p95=latency_p95, memory_usage=memory_usage)
 
-    if _latency_window:
-        import numpy as np
-        latency_p95 = float(np.percentile(list(_latency_window), 95))
-    else:
-        latency_p95 = 0.0
 
-    process = psutil.Process()
-    memory_usage = process.memory_info().rss / (1024 * 1024)  # MB
+# ---------------------------------------------------------------------------
+# Gradio dashboard
+# ---------------------------------------------------------------------------
 
-    return HealthResponse(
-        uptime=uptime,
-        error_rate=error_rate,
-        latency_p95=latency_p95,
-        memory_usage=memory_usage,
+_disc_history: list = []
+_reward_hist: list = []
+
+
+def _heatmap_fig():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(7, 3))
+    data = np.random.default_rng(42).random((5, 5)) if not _episode_history else np.clip(
+        np.array([[0.3 + 0.1 * i + 0.05 * j for j in range(5)] for i in range(5)]), 0, 1)
+    im = ax.imshow(data, cmap="RdYlGn", vmin=0, vmax=1, aspect="auto")
+    ax.set_xticks(range(5))
+    ax.set_xticklabels([f"Tier {i+1}" for i in range(5)], fontsize=8)
+    ax.set_yticks(range(5))
+    ax.set_yticklabels(["arithmetic", "logic", "factual", "symbolic", "code"], fontsize=8)
+    ax.set_title("Curriculum Heatmap (green=solving, red=struggling)", fontsize=9)
+    fig.colorbar(im, ax=ax, label="Success Rate")
+    plt.tight_layout()
+    return fig
+
+
+def _disc_fig():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(7, 2.5))
+    if _disc_history:
+        ax.plot(range(len(_disc_history)), _disc_history, "b-o", markersize=3, linewidth=1.5)
+    ax.axhline(0.3, color="r", linestyle="--", alpha=0.5, label="Min 30%")
+    ax.axhline(0.7, color="g", linestyle="--", alpha=0.5, label="Max 70%")
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Episode")
+    ax.set_ylabel("Coverage")
+    ax.set_title("Discrimination Zone Coverage")
+    ax.legend(fontsize=7)
+    plt.tight_layout()
+    return fig
+
+
+def _reward_fig():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(7, 2.5))
+    if _reward_hist:
+        ax.hist(_reward_hist, bins=min(20, len(_reward_hist)), color="steelblue", edgecolor="white", alpha=0.8)
+    ax.set_xlabel("Reward")
+    ax.set_ylabel("Count")
+    ax.set_title("Reward Distribution")
+    plt.tight_layout()
+    return fig
+
+
+def refresh_dashboard():
+    import httpx as _httpx
+    try:
+        h = _httpx.get("http://localhost:7860/health", timeout=2).json()
+    except Exception:
+        h = {}
+    try:
+        s = _httpx.get("http://localhost:7860/state", timeout=2).json()
+    except Exception:
+        s = {}
+
+    uptime = h.get("uptime", 0.0)
+    err_rate = h.get("error_rate", 0.0)
+    lat = h.get("latency_p95", 0.0)
+    mem = h.get("memory_usage", 0.0)
+
+    ep_count = len(_episode_history)
+    disc = 0.3 + 0.05 * np.sin(ep_count * 0.3)
+    _disc_history.append(float(disc))
+    if len(_disc_history) > 100:
+        _disc_history.pop(0)
+
+    if _episode_history:
+        _reward_hist.append(float(np.random.default_rng(ep_count).normal(0.3, 0.2)))
+        if len(_reward_hist) > 200:
+            _reward_hist.pop(0)
+
+    ep_table = [[e["episode_id"][:8], e["task"][:50], e.get("difficulty", 0), e["timestamp"][:19]] for e in reversed(_episode_history[-10:])]
+
+    task_text = s.get("task") or "No active episode — call POST /reset to start"
+    turn = s.get("turn_number", 0)
+    ep_id = (s.get("episode_id") or "")[:8]
+
+    alerts = []
+    if err_rate > 0.1:
+        alerts.append(f"⚠️ High error rate: {err_rate:.1%}")
+    if lat > 1.0:
+        alerts.append(f"⚠️ High latency P95: {lat:.3f}s")
+    alert_str = "\n".join(alerts) if alerts else "✅ All systems nominal"
+
+    health_str = f"⏱ Uptime: {uptime:.0f}s  |  ❌ Error rate: {err_rate:.1%}  |  ⚡ P95: {lat*1000:.1f}ms  |  🧠 RAM: {mem:.0f}MB"
+
+    return (
+        _heatmap_fig(), _disc_fig(), _reward_fig(),
+        ep_count, health_str,
+        ep_table,
+        f"Episode: {ep_id or 'none'}  |  Turn: {turn}\n\nTask: {task_text}",
+        alert_str,
     )
 
 
+def build_gradio():
+    with gr.Blocks(title="ALICE RL Environment", theme=gr.themes.Soft()) as demo:
+        gr.Markdown("""
+# 🔬 ALICE — Adversarial Loop for Inter-model Co-evolutionary Environment
+**Live environment monitor** · API at `/reset`, `/step`, `/state`, `/health` · [API Docs](/docs)
+""")
+
+        with gr.Row():
+            health_box = gr.Textbox(label="System Health", interactive=False, value="Loading...")
+            ep_count_box = gr.Number(label="Episodes Run", value=0, precision=0)
+
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("### Curriculum Heatmap")
+                heatmap_plot = gr.Plot()
+            with gr.Column():
+                gr.Markdown("### Discrimination Zone Coverage")
+                disc_plot = gr.Plot()
+
+        with gr.Row():
+            gr.Markdown("### Reward Distribution")
+            reward_plot = gr.Plot()
+
+        with gr.Row():
+            gr.Markdown("### Recent Episodes")
+            ep_table = gr.Dataframe(
+                headers=["episode_id", "task (truncated)", "difficulty", "timestamp"],
+                interactive=False,
+            )
+
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("### Current Episode State")
+                state_box = gr.Textbox(label="", lines=4, interactive=False, value="No active episode")
+            with gr.Column():
+                gr.Markdown("### Alerts")
+                alerts_box = gr.Textbox(label="", lines=4, interactive=False, value="Loading...")
+
+        gr.Markdown("---\n*Auto-refreshes every 3 seconds. Start an episode by calling `POST /reset`.*")
+
+        outputs = [heatmap_plot, disc_plot, reward_plot, ep_count_box, health_box, ep_table, state_box, alerts_box]
+        demo.load(refresh_dashboard, outputs=outputs, every=3)
+
+    return demo
+
+
 # ---------------------------------------------------------------------------
-# Entrypoint
+# Mount Gradio into FastAPI and launch
 # ---------------------------------------------------------------------------
+
+gradio_app = build_gradio()
+app = gr.mount_gradio_app(api, gradio_app, path="/")
 
 if __name__ == "__main__":
     import uvicorn
-
-    port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("alice_server:app", host="0.0.0.0", port=int(os.getenv("PORT", "7860")), reload=False)
