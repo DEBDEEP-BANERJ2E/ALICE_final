@@ -22,6 +22,7 @@ from typing import Any, Deque, Dict, Optional
 import psutil
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, field_validator
 
@@ -192,8 +193,8 @@ class HealthResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@app.get("/", response_class=Response)
-async def root() -> Response:
+@app.get("/", response_class=HTMLResponse)
+async def root() -> HTMLResponse:
     """Simple HTML status page for HF Spaces iframe."""
     html = """<!DOCTYPE html>
 <html><head><title>ALICE RL Environment</title>
@@ -208,10 +209,10 @@ GET  /state  — current state
 GET  /health — system health</pre>
 <p><a href="/health">/health</a> · <a href="/state">/state</a> · <a href="/docs">/docs</a></p>
 </body></html>"""
-    return Response(content=html, media_type="text/html")
+    return HTMLResponse(content=html)
 
 
-
+@app.post("/reset", response_model=ResetResponse)
 async def reset() -> ResetResponse:
     """Initialize a new episode and return the initial state."""
     episode_handler, curriculum_manager, task_generator, _, _, _ = _get_components()
