@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 MODEL_ID            = os.getenv("ALICE_MODEL_ID",             "Qwen/Qwen2.5-7B-Instruct")
-ENV_URL             = os.getenv("ALICE_ENV_URL",              "http://localhost:8000")
+ENV_URL             = os.getenv("ALICE_ENV_URL",              "http://localhost:7860")
 HF_REPO_ID          = os.getenv("ALICE_HF_REPO_ID",           "")
 LEARNING_RATE       = float(os.getenv("ALICE_LR",              "1e-5"))
 GAMMA               = float(os.getenv("ALICE_GAMMA",           "0.99"))
