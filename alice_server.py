@@ -192,7 +192,26 @@ class HealthResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@app.post("/reset", response_model=ResetResponse)
+@app.get("/", response_class=Response)
+async def root() -> Response:
+    """Simple HTML status page for HF Spaces iframe."""
+    html = """<!DOCTYPE html>
+<html><head><title>ALICE RL Environment</title>
+<style>body{font-family:monospace;background:#0d1117;color:#e6edf3;padding:2rem}
+a{color:#58a6ff}pre{background:#161b22;padding:1rem;border-radius:6px}</style>
+</head><body>
+<h2>🔬 ALICE RL Environment</h2>
+<p>OpenEnv-compliant RL training environment. API endpoints:</p>
+<pre>POST /reset  — initialize episode
+POST /step   — process action
+GET  /state  — current state
+GET  /health — system health</pre>
+<p><a href="/health">/health</a> · <a href="/state">/state</a> · <a href="/docs">/docs</a></p>
+</body></html>"""
+    return Response(content=html, media_type="text/html")
+
+
+
 async def reset() -> ResetResponse:
     """Initialize a new episode and return the initial state."""
     episode_handler, curriculum_manager, task_generator, _, _, _ = _get_components()
