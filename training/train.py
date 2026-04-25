@@ -124,19 +124,31 @@ class GRPOTrainer:
 
         # ── Attempt 2: Standard transformers (CPU / Apple MPS fallback) ───────
         if not unsloth_loaded:
+            import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
+
             self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-            self._model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                device_map="auto",
-                torch_dtype="auto",
-            )
-            self._ref_model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                device_map="auto",
-                torch_dtype="auto",
-            )
-            logger.info("Standard transformers loaded (CPU/MPS fallback path)")
+
+            # device_map="auto" requires accelerate — use explicit device instead
+            try:
+                import accelerate  # noqa: F401 — just check it's available
+                device_map: Any = "auto"
+            except ImportError:
+                device_map = None
+
+            load_kwargs: dict = {"torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32}
+            if device_map is not None:
+                load_kwargs["device_map"] = device_map
+
+            self._model = AutoModelForCausalLM.from_pretrained(self.model_id, **load_kwargs)
+            self._ref_model = AutoModelForCausalLM.from_pretrained(self.model_id, **load_kwargs)
+
+            # Move to GPU manually if accelerate not available but CUDA is
+            if device_map is None and torch.cuda.is_available():
+                self._model = self._model.cuda()
+                self._ref_model = self._ref_model.cuda()
+
+            logger.info("Standard transformers loaded (device_map=%s)", device_map or "cuda/cpu manual")
 
         logger.info("Model ready")
 
