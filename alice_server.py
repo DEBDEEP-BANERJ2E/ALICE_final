@@ -302,7 +302,7 @@ def refresh_dashboard():
 
 
 def build_gradio():
-    with gr.Blocks(title="ALICE RL Environment", theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(title="ALICE RL Environment") as demo:
         gr.Markdown("""
 # 🔬 ALICE — Adversarial Loop for Inter-model Co-evolutionary Environment
 **Live environment monitor** · API at `/reset`, `/step`, `/state`, `/health` · [API Docs](/docs)
@@ -342,7 +342,8 @@ def build_gradio():
         gr.Markdown("---\n*Auto-refreshes every 3 seconds. Start an episode by calling `POST /reset`.*")
 
         outputs = [heatmap_plot, disc_plot, reward_plot, ep_count_box, health_box, ep_table, state_box, alerts_box]
-        demo.load(refresh_dashboard, outputs=outputs, every=3)
+        timer = gr.Timer(value=3)
+        timer.tick(refresh_dashboard, outputs=outputs)
 
     return demo
 
