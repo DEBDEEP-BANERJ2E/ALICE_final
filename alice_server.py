@@ -117,9 +117,9 @@ api.add_middleware(RequestLoggingMiddleware)
 
 @api.on_event("startup")
 async def _startup():
-    """Pre-warm heavy models in the background so the first request is fast."""
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(_bg_executor, _prewarm_sentence_transformer)
+    """Pre-warm is disabled on Space — 2GB RAM is too tight for sentence-transformer at startup.
+    The model loads lazily on first /step call instead."""
+    logger.info("Server startup complete (lazy component init enabled)")
 api.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 

@@ -244,7 +244,8 @@ class GRPOTrainer:
         rollouts = []
         for _ in range(self.group_size):
             try:
-                reset_resp = httpx.post(f"{self.env_url}/reset", timeout=10.0)
+                reset_resp = httpx.post(f"{self.env_url}/reset", timeout=15.0)
+                reset_resp.raise_for_status()
                 state      = reset_resp.json()
                 episode_id = state.get("episode_id", "")
                 total_reward = 0.0
@@ -255,6 +256,18 @@ class GRPOTrainer:
                         json={"action": action, "episode_id": episode_id},
                         timeout=30.0,
                     )
+                    if step_resp.status_code == 400:
+                        # Stale episode_id (Space restarted) — get a fresh episode
+                        logger.warning("Stale episode_id %s — resetting", episode_id[:8])
+                        reset_resp = httpx.post(f"{self.env_url}/reset", timeout=15.0)
+                        reset_resp.raise_for_status()
+                        state = reset_resp.json()
+                        episode_id = state.get("episode_id", "")
+                        step_resp = httpx.post(
+                            f"{self.env_url}/step",
+                            json={"action": action, "episode_id": episode_id},
+                            timeout=30.0,
+                        )
                     step_data    = step_resp.json()
                     total_reward += step_data.get("reward", 0.0)
                     state        = step_data.get("state", state)
@@ -263,7 +276,7 @@ class GRPOTrainer:
                 rollouts.append({
                     "reward":       total_reward,
                     "episode_id":   episode_id,
-                    "policy_ratio": 1.0,   # π_θ / π_ref — real impl uses log-prob diff
+                    "policy_ratio": 1.0,
                 })
             except Exception as exc:
                 logger.error("Rollout failed: %s", exc)
