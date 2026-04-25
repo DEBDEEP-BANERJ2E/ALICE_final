@@ -220,13 +220,16 @@ class VerifierStack:
         exception_container: Dict[str, Any] = {}
 
         def _run() -> None:
-            # Best-effort memory limit via resource module (UNIX only)
-            try:
-                import resource as _resource
-                limit = SANDBOX_MEMORY_MB * 1024 * 1024
-                _resource.setrlimit(_resource.RLIMIT_AS, (limit, limit))
-            except Exception:
-                pass  # not supported on this platform
+            # Memory limit via resource module — skip on HF Spaces (SPACE_ID is set by HF)
+            # because setrlimit(RLIMIT_AS, 512MB) limits the whole process, crashing the server.
+            is_hf_space = bool(os.getenv("SPACE_ID") or os.getenv("SPACE_AUTHOR_NAME"))
+            if not is_hf_space:
+                try:
+                    import resource as _resource
+                    limit = SANDBOX_MEMORY_MB * 1024 * 1024
+                    _resource.setrlimit(_resource.RLIMIT_AS, (limit, limit))
+                except Exception:
+                    pass
 
             captured_stdout = io.StringIO()
             captured_stderr = io.StringIO()
