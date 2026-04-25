@@ -1,5 +1,18 @@
 # ALICE — Active Links
 
+## Hugging Face Space (Live)
+
+| Resource | URL |
+|---|---|
+| **Gradio Dashboard** | https://rohanjain1648-alice-rl-environment.hf.space |
+| **API Swagger Docs** | https://rohanjain1648-alice-rl-environment.hf.space/docs |
+| **Health Endpoint** | https://rohanjain1648-alice-rl-environment.hf.space/health |
+| **Leaderboard API** | https://rohanjain1648-alice-rl-environment.hf.space/leaderboard |
+| **Failure Bank API** | https://rohanjain1648-alice-rl-environment.hf.space/failures |
+| **HF Space page** | https://huggingface.co/spaces/rohanjain1648/alice-rl-environment |
+| **Space file tree** | https://huggingface.co/spaces/rohanjain1648/alice-rl-environment/tree/main |
+| **HF Jobs Dashboard** | https://huggingface.co/spaces |
+
 ## Environment Server (local)
 
 | Page | URL |
@@ -9,6 +22,7 @@
 | Health Check | http://localhost:7860/health |
 | Current State | http://localhost:7860/state |
 | Failure Bank | http://localhost:7860/failures |
+| Leaderboard | http://localhost:7860/leaderboard |
 | OpenAPI JSON | http://localhost:7860/openapi.json |
 
 ## Environment API Endpoints
@@ -19,70 +33,75 @@
 | `POST` | `/step` | Submit an action, returns reward + next state |
 | `GET`  | `/state` | Current episode state |
 | `GET`  | `/health` | Uptime, error rate, latency P95, RAM |
-| `GET`  | `/failures` | Failure bank (optional `?error_type=` / `?agent_version=` filters) |
+| `GET`  | `/failures` | Failure bank (`?error_type=` / `?agent_version=` filters) |
+| `GET`  | `/leaderboard` | Leaderboard (`?model_ids=id1,id2` filter) |
+| `POST` | `/leaderboard/update` | Push training scores (used by train scripts) |
+| `POST` | `/leaderboard/submit` | Register a user model for comparison |
 
-## Standalone Analytics Dashboard
-
-Run separately on port 7861:
-
-```bash
-ALICE_ENV_URL=http://localhost:7860 python dashboard/gradio_app.py
-```
-
-| Page | URL |
-|---|---|
-| Analytics Dashboard | http://localhost:7861 |
-
-## Hugging Face
-
-Configure these environment variables (Space secrets) to enable HF links:
-
-| Env var | Purpose |
-|---|---|
-| `HF_SPACE_ID` | `username/env-space-name` — the environment Space |
-| `ALICE_HF_REPO_ID` | `username/training-space-name` — the training Space |
-| `HF_TOKEN` | Write token for private spaces and checkpoint pushes |
-
-Once set, the URLs follow this pattern:
-
-| Resource | URL pattern |
-|---|---|
-| Environment Space | `https://<username>-<space-name>.hf.space` |
-| Environment Space Docs | `https://<username>-<space-name>.hf.space/docs` |
-| Training Space | `https://<username>-<training-space>.hf.space` |
-| HF Space Jobs | https://huggingface.co/spaces |
-| HF Hub | https://huggingface.co |
-
-## Starting Everything
-
-### Local (single command)
+## Standalone Analytics Dashboard (local)
 
 ```bash
-cd alice_env
-python alice_server.py
-# → Gradio at http://localhost:7860
-# → API    at http://localhost:7860/docs
-```
-
-### Local (server + standalone dashboard)
-
-```bash
-# Terminal 1
-python alice_server.py
-
-# Terminal 2
 ALICE_ENV_URL=http://localhost:7860 python dashboard/gradio_app.py
 # → Advanced analytics at http://localhost:7861
 ```
 
-### Training (local, needs GPU)
+## Training
 
+### Pure TRL GRPO
 ```bash
-ALICE_ENV_URL=http://localhost:7860 python training/train.py
+ALICE_ENV_URL=http://localhost:7860 python training/train_trl.py \
+    --model_id Qwen/Qwen2.5-1.5B-Instruct --episodes 200 --load_in_4bit
 ```
 
-### Deploy to HF Spaces
+### Unsloth + TRL GRPO (2× faster, -60% VRAM)
+```bash
+ALICE_ENV_URL=http://localhost:7860 python training/train_unsloth.py \
+    --model_id Qwen/Qwen2.5-1.5B-Instruct --episodes 200
+```
+
+### Against the live HF Space
+```bash
+ALICE_ENV_URL=https://rohanjain1648-alice-rl-environment.hf.space \
+python training/train_trl.py --model_id Qwen/Qwen2.5-0.5B-Instruct
+```
+
+## Colab Notebooks
+
+| Notebook | Link |
+|---|---|
+| TRL GRPO | notebooks/train_trl_colab.ipynb |
+| Unsloth GRPO | notebooks/train_unsloth_colab.ipynb |
+
+## Benchmark Models (Leaderboard)
+
+| Model | HF ID |
+|---|---|
+| Qwen2.5-0.5B | `Qwen/Qwen2.5-0.5B-Instruct` |
+| Qwen2.5-1.5B | `Qwen/Qwen2.5-1.5B-Instruct` |
+| Qwen2.5-3B   | `Qwen/Qwen2.5-3B-Instruct` |
+| SmolLM2-1.7B | `HuggingFaceTB/SmolLM2-1.7B-Instruct` |
+| Gemma-3-1B   | `google/gemma-3-1b-it` |
+
+## Space Secrets to Configure
+
+| Secret | Value |
+|---|---|
+| `HF_SPACE_ID` | `rohanjain1648/alice-rl-environment` |
+| `ALICE_HF_REPO_ID` | `rohanjain1648/<training-space>` |
+| `HF_TOKEN` | your HF write token |
+| `OPENAI_API_KEY` | your OpenAI key (for T2 LLM judge) |
+
+## Deploy / Update
 
 ```bash
-HF_SPACE_ID=username/alice-env HF_TOKEN=hf_... bash scripts/deploy_spaces.sh
+# From ALICE_final/
+python -c "
+from huggingface_hub import HfApi
+HfApi().upload_folder(
+    folder_path='alice_env',
+    repo_id='rohanjain1648/alice-rl-environment',
+    repo_type='space',
+    ignore_patterns=['.venv/**','__pycache__/**','*.pyc','data/**','checkpoints/**','.pytest_cache/**'],
+)
+"
 ```
