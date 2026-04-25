@@ -127,7 +127,20 @@ class GRPOTrainer:
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
 
-            self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+            # On T4 (16GB), loading two copies of 7B at float16 = ~28GB → OOM.
+            # Fall back to 1.5B which fits comfortably (2 × ~3GB = ~6GB).
+            effective_model = self.model_id
+            if torch.cuda.is_available():
+                gpu_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+                if gpu_gb < 20 and "7b" in self.model_id.lower():
+                    effective_model = self.model_id.replace("7B", "1.5B").replace("7b", "1.5B")
+                    logger.info(
+                        "GPU has %.0fGB VRAM and Unsloth unavailable — "
+                        "switching to smaller model %s to avoid OOM",
+                        gpu_gb, effective_model,
+                    )
+
+            self._tokenizer = AutoTokenizer.from_pretrained(effective_model)
 
             # device_map="auto" requires accelerate — use explicit device instead
             try:
@@ -136,19 +149,20 @@ class GRPOTrainer:
             except ImportError:
                 device_map = None
 
-            load_kwargs: dict = {"torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32}
+            dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            load_kwargs: dict = {"dtype": dtype}
             if device_map is not None:
                 load_kwargs["device_map"] = device_map
 
-            self._model = AutoModelForCausalLM.from_pretrained(self.model_id, **load_kwargs)
-            self._ref_model = AutoModelForCausalLM.from_pretrained(self.model_id, **load_kwargs)
+            self._model = AutoModelForCausalLM.from_pretrained(effective_model, **load_kwargs)
+            self._ref_model = AutoModelForCausalLM.from_pretrained(effective_model, **load_kwargs)
 
             # Move to GPU manually if accelerate not available but CUDA is
             if device_map is None and torch.cuda.is_available():
                 self._model = self._model.cuda()
                 self._ref_model = self._ref_model.cuda()
 
-            logger.info("Standard transformers loaded (device_map=%s)", device_map or "cuda/cpu manual")
+            logger.info("Standard transformers loaded: %s (device_map=%s)", effective_model, device_map or "cuda/cpu manual")
 
         logger.info("Model ready")
 
