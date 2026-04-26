@@ -61,6 +61,8 @@ class FailureBankEntry:
 class FailureBank:
     """Stores and indexes failed tasks for repair synthesis."""
 
+    _st_model = None  # shared SentenceTransformer instance
+
     def __init__(self) -> None:
         self._entries: Dict[str, FailureBankEntry] = {}
         self._repair_queue: List[str] = []  # ordered failure_ids
@@ -177,9 +179,19 @@ class FailureBank:
 
     def _compute_embedding(self, text: str) -> np.ndarray:
         """Compute sentence-transformer embedding for a text string."""
-        # Placeholder — real implementation uses SentenceTransformer
-        rng = np.random.default_rng(abs(hash(text)) % (2**32))
-        return rng.random(768).astype(np.float32)
+        try:
+            from sentence_transformers import SentenceTransformer  # type: ignore
+            if not hasattr(FailureBank, "_st_model") or FailureBank._st_model is None:
+                FailureBank._st_model = SentenceTransformer("all-MiniLM-L6-v2")
+            emb = FailureBank._st_model.encode(text, normalize_embeddings=True)
+            result = np.zeros(768, dtype=np.float32)
+            n = min(len(emb), 768)
+            result[:n] = emb[:n]
+            return result
+        except Exception:
+            # Fallback to deterministic hash-based embedding when model unavailable
+            rng = np.random.default_rng(abs(hash(text)) % (2**32))
+            return rng.random(768).astype(np.float32)
 
     def _update_repair_queue(self, entry: FailureBankEntry) -> None:
         """Add entry to repair queue if novelty is high enough."""

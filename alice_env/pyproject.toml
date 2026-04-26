@@ -14,32 +14,50 @@ version = "0.1.0"
 description = "Alice Env environment for OpenEnv"
 requires-python = ">=3.10"
 dependencies = [
-    # Core OpenEnv runtime (provides FastAPI server + HTTP client types)
-    # install from github
-    # "openenv-core[core] @ git+https://github.com/meta-pytorch/OpenEnv.git",
     "openenv-core[core]>=0.2.2",
-    # Environment-specific dependencies
-    # Add all dependencies needed for your environment here
-    # Examples:
-    # "numpy>=1.19.0",
-    # "torch>=2.0.0",
-    # "gymnasium>=0.29.0",
-    # "openspiel>=1.0.0",
-    # "smolagents>=1.22.0,<2",
+    "numpy>=1.26.0",
+    "openai>=1.0.0",
+    "httpx>=0.24.0",
+    "psutil>=5.9.0",
+    "python-dotenv>=1.0.0",
+    "RestrictedPython>=7.0",
+    "sentence-transformers>=2.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "gradio>=4.0.0",
+    "torch>=2.1.0",
+    "transformers>=4.40.0",
+    "trl>=0.8.0",
+    "matplotlib>=3.7.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.0.0",
+    "httpx>=0.24.0",
 ]
 
 [project.scripts]
-# Server entry point - enables running via: uv run --project . server
-# or: python -m alice_env.server.app
 server = "alice_env.server.app:main"
+
+[tool.uv.scripts]
+serve = "uvicorn server:app --host 0.0.0.0 --port 7860 --workers 1"
+train = "python training/train.py"
+dashboard = "python dashboard/gradio_app.py"
 
 [tool.setuptools]
 include-package-data = true
 packages = ["alice_env", "alice_env.server"]
 package-dir = { "alice_env" = ".", "alice_env.server" = "server" }
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "psutil>=7.2.2",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "python-dotenv>=1.2.2",
+    "restrictedpython>=8.1",
+]

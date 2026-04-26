@@ -174,10 +174,10 @@ class StepResponse(BaseModel):
 
 
 class StateResponse(BaseModel):
-    episode_id: Optional[str]
-    turn_number: int
-    task: Optional[str]
-    agent_version: Optional[str]
+    episode_id: str | None = None
+    turn_number: int = 0
+    task: str | None = None
+    agent_version: str | None = None
 
 
 class HealthResponse(BaseModel):

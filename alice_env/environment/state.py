@@ -3,7 +3,7 @@ MDP state representation for ALICE.
 
 State vector: (task_embedding[768], agent_capability_vector[5], difficulty_tier,
                turn_number, failure_bank_snapshot[16×768], discrimination_coverage,
-               cumulative_reward) — total 12,065 dimensions.
+               cumulative_reward) — total 13,065 dimensions.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import List, Optional
 import numpy as np
 
 
-STATE_DIM = 12_065
+STATE_DIM = 13_065
 TASK_EMBED_DIM = 768
 CAPABILITY_DIM = 5
 FAILURE_SNAPSHOT_K = 16
@@ -35,7 +35,7 @@ class MDPState:
     cumulative_reward: float = 0.0
 
     def to_vector(self) -> np.ndarray:
-        """Serialize state to a flat numpy array of shape (12065,)."""
+        """Serialize state to a flat numpy array of shape (13065,)."""
         return np.concatenate([
             self.task_embedding,
             self.agent_capability_vector,
@@ -48,7 +48,7 @@ class MDPState:
 
     @classmethod
     def from_vector(cls, vec: np.ndarray) -> "MDPState":
-        """Deserialize state from a flat numpy array of shape (12065,)."""
+        """Deserialize state from a flat numpy array of shape (13065,)."""
         if vec.shape[0] != STATE_DIM:
             raise ValueError(f"Expected vector of length {STATE_DIM}, got {vec.shape[0]}")
         offset = 0

@@ -1,12 +1,15 @@
 """
-Oracle Interface — calibrates benchmarks using reference models (GPT-4o, Qwen-72B)
-with caching and rate-limit handling.
+Oracle Interface — calibrates benchmarks using reference models.
+
+Uses the HF Inference API (OpenAI-compatible) to evaluate tasks and compute
+discrimination scores. Results are cached with 30-day TTL to minimize API costs.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
@@ -18,12 +21,17 @@ DIFFICULTY_EASY_MAX = 0.4
 DIFFICULTY_HARD_MIN = 0.7
 CACHE_HIT_RATE_WARNING = 0.5
 
+# HF Inference API config
+_API_BASE = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
+_API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or "dummy"
+_PRIMARY_MODEL = os.getenv("REFERENCE_MODEL_PRIMARY", "TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+_SECONDARY_MODEL = os.getenv("REFERENCE_MODEL_SECONDARY", "TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+
 
 class OracleInterface:
     """Calibrates task difficulty using reference model evaluations."""
 
     def __init__(self) -> None:
-        # Cache: (task_hash, model_name) → {score, timestamp}
         self._cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._cache_hits: int = 0
         self._cache_misses: int = 0
@@ -33,32 +41,30 @@ class OracleInterface:
     # ------------------------------------------------------------------
 
     def calibrate_task(self, task: str) -> Dict[str, Any]:
-        """Evaluate a task using GPT-4o and Qwen-72B reference models.
+        """Evaluate a task using primary and secondary reference models.
 
         Returns:
-            {gpt4o_score, qwen72b_score, reference_performance, difficulty,
+            {primary_score, secondary_score, reference_performance, difficulty,
              flagged_for_review}
         """
         task_hash = self._hash_task(task)
-        gpt4o_score = self._get_or_fetch_score(task_hash, "gpt4o", task)
-        qwen_score = self._get_or_fetch_score(task_hash, "qwen72b", task)
+        primary_score = self._get_or_fetch_score(task_hash, "primary", task)
+        secondary_score = self._get_or_fetch_score(task_hash, "secondary", task)
 
-        reference_performance = (gpt4o_score + qwen_score) / 2.0
+        reference_performance = (primary_score + secondary_score) / 2.0
         difficulty = self._assign_difficulty(reference_performance)
-        flagged = abs(gpt4o_score - qwen_score) > DIVERGENCE_THRESHOLD
+        flagged = abs(primary_score - secondary_score) > DIVERGENCE_THRESHOLD
 
         if flagged:
             logger.warning(
-                "Task %s flagged for manual review: gpt4o=%.2f qwen72b=%.2f",
-                task_hash[:8],
-                gpt4o_score,
-                qwen_score,
+                "Task %s flagged: primary=%.2f secondary=%.2f",
+                task_hash[:8], primary_score, secondary_score,
             )
 
-        self._log_calibration(task_hash, gpt4o_score, qwen_score, difficulty)
+        self._log_calibration(task_hash, primary_score, secondary_score, difficulty)
         return {
-            "gpt4o_score": gpt4o_score,
-            "qwen72b_score": qwen_score,
+            "gpt4o_score": primary_score,
+            "qwen72b_score": secondary_score,
             "reference_performance": reference_performance,
             "difficulty": difficulty,
             "flagged_for_review": flagged,
@@ -88,32 +94,58 @@ class OracleInterface:
             return 0.0
         rate = self._cache_hits / total
         if rate < CACHE_HIT_RATE_WARNING:
-            logger.warning("Cache hit rate %.2f is below threshold %.2f", rate, CACHE_HIT_RATE_WARNING)
+            logger.warning("Cache hit rate %.2f below threshold %.2f", rate, CACHE_HIT_RATE_WARNING)
         return rate
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_or_fetch_score(self, task_hash: str, model_name: str, task: str) -> float:
-        cached = self.get_cached_score(task_hash, model_name)
+    def _get_or_fetch_score(self, task_hash: str, model_key: str, task: str) -> float:
+        cached = self.get_cached_score(task_hash, model_key)
         if cached is not None:
             self._cache_hits += 1
             return cached
         self._cache_misses += 1
-        score = self._call_reference_model(model_name, task)
-        self._cache[(task_hash, model_name)] = {
+        score = self._call_reference_model(model_key, task)
+        self._cache[(task_hash, model_key)] = {
             "score": score,
             "timestamp": datetime.now(timezone.utc),
         }
         return score
 
-    def _call_reference_model(self, model_name: str, task: str) -> float:
-        """Call a reference model API and return a score in [0, 1].
+    def _call_reference_model(self, model_key: str, task: str) -> float:
+        """Call reference model via HF Inference API and return a difficulty score in [0, 1].
 
-        Placeholder — real implementation uses OpenAI / HF Inference API.
+        Score represents how difficult the task is for the reference model.
+        Higher score = model finds it harder (useful for discrimination zone).
         """
-        return 0.5  # placeholder
+        try:
+            from openai import OpenAI  # type: ignore
+
+            model = _PRIMARY_MODEL if model_key == "primary" else _SECONDARY_MODEL
+            client = OpenAI(api_key=_API_KEY, base_url=_API_BASE)
+
+            eval_prompt = (
+                f"Rate how difficult this task is for an AI assistant on a scale of 0.0 to 1.0.\n"
+                f"0.0 = trivially easy, 1.0 = extremely hard.\n\n"
+                f"Task: {task[:400]}\n\n"
+                f"Reply with ONLY a single decimal number between 0.0 and 1.0."
+            )
+
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": eval_prompt}],
+                max_tokens=10,
+                temperature=0.0,
+            )
+            raw = resp.choices[0].message.content.strip() if resp.choices else "0.5"
+            score = float(raw.split()[0])
+            return max(0.0, min(1.0, score))
+
+        except Exception as exc:
+            logger.warning("Reference model call failed (%s) — using default 0.5", exc)
+            return 0.5
 
     def _assign_difficulty(self, reference_performance: float) -> str:
         if reference_performance < DIFFICULTY_EASY_MAX:
@@ -127,12 +159,9 @@ class OracleInterface:
         return hashlib.sha256(task.encode()).hexdigest()
 
     def _log_calibration(
-        self, task_hash: str, gpt4o_score: float, qwen_score: float, difficulty: str
+        self, task_hash: str, primary_score: float, secondary_score: float, difficulty: str
     ) -> None:
         logger.info(
-            "Calibrated task %s: gpt4o=%.2f qwen72b=%.2f difficulty=%s",
-            task_hash[:8],
-            gpt4o_score,
-            qwen_score,
-            difficulty,
+            "Calibrated %s: primary=%.2f secondary=%.2f difficulty=%s",
+            task_hash[:8], primary_score, secondary_score, difficulty,
         )
