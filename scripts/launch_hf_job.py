@@ -34,15 +34,15 @@ if not HF_TOKEN:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--model",    default="HuggingFaceTB/SmolLM2-135M-Instruct")
-    p.add_argument("--episodes", type=int, default=300)
-    p.add_argument("--group",    type=int, default=4)
-    p.add_argument("--turns",    type=int, default=2)
+    p.add_argument("--model",    default="Qwen/Qwen2.5-0.5B-Instruct")
+    p.add_argument("--episodes", type=int, default=100)
+    p.add_argument("--group",    type=int, default=8)
+    p.add_argument("--turns",    type=int, default=3)
     p.add_argument("--4bit",     dest="load_4bit", action="store_true",
                    help="Enable 4-bit quantisation (GPU only)")
-    p.add_argument("--flavor",   default="t4-small",
+    p.add_argument("--flavor",   default="a10g-small",
                    choices=["cpu-basic", "cpu-upgrade", "t4-small", "t4-medium",
-                             "l4x1", "a10g-small", "a10g-large"])
+                             "l4x1", "a10g-small", "a10g-large", "l40sx1"])
     p.add_argument("--no-wait",  action="store_true")
     return p.parse_args()
 
@@ -89,6 +89,7 @@ def main():
     print(f"   Job ID:  {job.id}")
     print(f"   Job URL: {job.url}")
     print(f"   Status:  {job.status.stage}")
+    print(f"   Model:   {args.model} on {args.flavor}")
 
     if args.no_wait:
         print(f"\nStream logs: python -c \"from huggingface_hub import fetch_job_logs; "
