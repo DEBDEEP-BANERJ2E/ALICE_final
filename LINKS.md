@@ -11,7 +11,7 @@
 | **Failure Bank API** | https://rohanjain1648-alice-rl-environment.hf.space/failures |
 | **HF Space page** | https://huggingface.co/spaces/rohanjain1648/alice-rl-environment |
 | **Space file tree** | https://huggingface.co/spaces/rohanjain1648/alice-rl-environment/tree/main |
-| **HF Jobs Dashboard** | https://huggingface.co/spaces |
+| **HF Jobs Dashboard** | https://huggingface.co/settings/jobs *(login required)* |
 
 ## Environment Server (local)
 
@@ -67,10 +67,13 @@ python training/train_trl.py --model_id Qwen/Qwen2.5-0.5B-Instruct
 
 ## Colab Notebooks
 
-| Notebook | Link |
-|---|---|
-| TRL GRPO | notebooks/train_trl_colab.ipynb |
-| Unsloth GRPO | notebooks/train_unsloth_colab.ipynb |
+Click the badge to open directly in Google Colab (T4 GPU, no setup needed):
+
+| Notebook | Open in Colab | HF File | Description |
+|---|---|---|---|
+| **Full Project** | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/#fileId=https://huggingface.co/spaces/rohanjain1648/alice-rl-environment/resolve/main/notebooks/alice_full_colab.ipynb) | [alice_full_colab.ipynb](https://huggingface.co/spaces/rohanjain1648/alice-rl-environment/blob/main/notebooks/alice_full_colab.ipynb) | Clones repo, starts server, full GRPO training, 9-panel analysis, saves model, pushes to HF |
+| TRL GRPO | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/#fileId=https://huggingface.co/spaces/rohanjain1648/alice-rl-environment/resolve/main/notebooks/train_trl_colab.ipynb) | [train_trl_colab.ipynb](https://huggingface.co/spaces/rohanjain1648/alice-rl-environment/blob/main/notebooks/train_trl_colab.ipynb) | Pure TRL GRPO against live HF Space |
+| Unsloth GRPO | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/#fileId=https://huggingface.co/spaces/rohanjain1648/alice-rl-environment/resolve/main/notebooks/train_unsloth_colab.ipynb) | [train_unsloth_colab.ipynb](https://huggingface.co/spaces/rohanjain1648/alice-rl-environment/blob/main/notebooks/train_unsloth_colab.ipynb) | 2× faster with Unsloth 4-bit QLoRA |
 
 ## Benchmark Models (Leaderboard)
 
