@@ -8,7 +8,6 @@ app_port: 7860
 pinned: false
 hardware: t4-small
 secrets:
-  - OPENAI_API_KEY
   - HF_TOKEN
   - REFERENCE_MODEL_PRIMARY
   - REFERENCE_MODEL_SECONDARY
@@ -21,10 +20,75 @@ secrets:
 [![HF Space](https://img.shields.io/badge/🤗%20Space-ALICE%20RL%20Environment-blue)](https://huggingface.co/spaces/rohanjain1648/alice-rl-environment)
 [![Open in Colab (TRL)](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/rohanjain1648/alice-rl-environment/blob/main/notebooks/train_trl_colab.ipynb)
 [![Open in Colab (Unsloth)](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/rohanjain1648/alice-rl-environment/blob/main/notebooks/train_unsloth_colab.ipynb)
+[![OpenEnv](https://img.shields.io/badge/OpenEnv-compatible-orange)](https://github.com/meta-pytorch/OpenEnv)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-green)](LICENSE)
 
-ALICE is a **closed-loop, adversarial RL training environment** that implements a **hunt → repair → verify → escalate** cycle for training LLM agents using GRPO (Group Relative Policy Optimisation, as in DeepSeek-R1).
+---
 
-It is built on top of **OpenEnv** — the standardised RL environment framework for LLMs — and deployed as a Hugging Face Docker Space.
+**ALICE is a closed-loop, adversarial RL training environment for LLMs.** It implements a continuous **hunt → verify → repair → escalate** cycle: the environment generates tasks that sit just at the frontier of the model's capability, grades responses through a three-tier verifier, banks novel failures, and escalates difficulty as the model improves — all without any human labels or static datasets.
+
+Built on top of **[OpenEnv](https://github.com/meta-pytorch/OpenEnv)** and deployed as a Hugging Face Docker Space.
+
+---
+
+## Why ALICE?
+
+Static benchmarks saturate. Once a model solves most of a fixed test set, scores cluster near the ceiling and stop measuring real capability differences.
+
+![HF Open LLM Leaderboard v2 — intro and motivation](images/hf_blog_1.jpeg)
+
+![Benchmark saturation: top scores converging on human baseline](images/hf_blog_2.jpeg)
+
+![Saturation causes: easy tasks, contamination, benchmark errors](images/hf_blog_3.jpeg)
+
+ALICE sidesteps saturation by generating tasks **adversarially** — always targeting the model's discrimination zone (tasks it gets right 20–80% of the time). There is no ceiling because the environment co-evolves with the model.
+
+| Traditional Benchmark | ALICE |
+|---|---|
+| Fixed task set | Auto-generated, model-specific tasks |
+| Human labelling | Oracle discrimination + verifier stack |
+| Saturates quickly | Co-evolves with the model — no ceiling |
+| Pass/fail on test split | GRPO gradient signal every episode |
+| One-shot scoring | Continuous online training loop |
+
+---
+
+## Architecture
+
+![ALICE co-evolutionary architecture](images/alice_architecture.png)
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                       ALICE RL Environment                       │
+│                                                                  │
+│  ┌─────────────────────┐     ┌──────────────────────────────┐   │
+│  │  FastAPI / OpenEnv  │     │     Gradio Dashboard (8 tabs) │   │
+│  │  POST /reset        │     │  Mission | Overview |          │   │
+│  │  POST /step         │     │  Training Metrics | Curriculum │   │
+│  │  GET  /state        │     │  HF Jobs | Failure Bank |      │   │
+│  │  GET  /health       │     │  Leaderboard | Pro Access      │   │
+│  │  POST /training/push│     └──────────────────────────────┘   │
+│  │  GET  /leaderboard  │                                         │
+│  │  POST /jobs/register│                                         │
+│  └──────────┬──────────┘                                         │
+│             │                                                    │
+│  ┌──────────▼──────────────────────────────────────────────┐    │
+│  │                     Core Components                      │    │
+│  │                                                          │    │
+│  │  EpisodeHandler ──────▶ CurriculumManager                │    │
+│  │        │                      │                          │    │
+│  │        ▼                      ▼                          │    │
+│  │  TaskGenerator          VerifierStack                    │    │
+│  │  (Hunt + Repair)      T1: RestrictedPython               │    │
+│  │        │              T2: LLM Judge (CoT rubric)         │    │
+│  │        ▼              T3: Regression battery             │    │
+│  │  RewardFunction               │                          │    │
+│  │  (GRPO-shaped)        FailureBank                        │    │
+│  │        │              (sentence-transformer + k-NN)      │    │
+│  │        └──────────────────────┘                          │    │
+│  └──────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -37,85 +101,327 @@ It is built on top of **OpenEnv** — the standardised RL environment framework 
 | **Health Endpoint** | https://rohanjain1648-alice-rl-environment.hf.space/health |
 | **Leaderboard API** | https://rohanjain1648-alice-rl-environment.hf.space/leaderboard |
 | **HF Space** | https://huggingface.co/spaces/rohanjain1648/alice-rl-environment |
-| **HF Jobs Dashboard** | https://huggingface.co/spaces |
+| **HF Jobs Dashboard** | https://huggingface.co/settings/jobs |
 
 ---
 
-## Architecture
+## Quick Start
 
+### Remote — Async (Python)
+
+```python
+import asyncio
+import httpx
+
+ALICE_URL = "https://rohanjain1648-alice-rl-environment.hf.space"
+
+async def main():
+    async with httpx.AsyncClient(base_url=ALICE_URL, timeout=30) as client:
+        # Start an episode
+        ep = (await client.post("/reset")).json()
+        episode_id = ep["episode_id"]
+        task       = ep["task"]
+        print(f"Task: {task}")
+
+        # Submit an answer (turn 1 of 3)
+        result = (await client.post("/step", json={
+            "episode_id": episode_id,
+            "action": "result = 42"
+        })).json()
+
+        print(f"Reward: {result['reward']:.4f}")
+        print(f"Done:   {result['done']}")
+        print(f"Score:  {result['info']['verification']['composite_score']:.4f}")
+
+asyncio.run(main())
 ```
-┌──────────────────────────────────────────────────────────┐
-│                    ALICE RL Environment                  │
-│                                                          │
-│  ┌─────────────┐     ┌──────────────────────────────┐   │
-│  │  FastAPI /  │     │        Gradio UI (6 tabs)     │   │
-│  │  OpenEnv    │     │  Overview | Curriculum |      │   │
-│  │  API        │     │  Training | HF Jobs |         │   │
-│  │  /reset     │     │  Failure Bank | Leaderboard   │   │
-│  │  /step      │     └──────────────────────────────┘   │
-│  │  /health    │                                         │
-│  │  /state     │                                         │
-│  │  /failures  │                                         │
-│  │  /leaderboard│                                        │
-│  └──────┬──────┘                                         │
-│         │                                                │
-│  ┌──────▼──────────────────────────────────────────┐    │
-│  │              Core Components                     │    │
-│  │                                                  │    │
-│  │  EpisodeHandler ──▶ CurriculumManager            │    │
-│  │       │                    │                     │    │
-│  │  TaskGenerator        VerifierStack              │    │
-│  │  (Hunt + Repair)    T1: RestrictedPython         │    │
-│  │       │             T2: LLM Judge (CoT rubric)   │    │
-│  │  RewardFunction      T3: 500+ Regression tests   │    │
-│  │  (GRPO-shaped)             │                     │    │
-│  │       │             FailureBank                  │    │
-│  │       └──────────── (sentence-transformer + kNN) │    │
-│  └──────────────────────────────────────────────────┘    │
-└──────────────────────────────────────────────────────────┘
+
+### Remote — Sync
+
+```python
+import httpx
+
+ALICE_URL = "https://rohanjain1648-alice-rl-environment.hf.space"
+
+with httpx.Client(base_url=ALICE_URL, timeout=30) as client:
+    ep = client.post("/reset").json()
+    result = client.post("/step", json={
+        "episode_id": ep["episode_id"],
+        "action": f"result = 'Canberra'"
+    }).json()
+    print(result["reward"], result["done"])
+```
+
+### Local
+
+```bash
+# Clone and install
+git clone https://github.com/DEBDEEP-BANERJ2E/ALICE_final.git
+cd ALICE_final
+pip install -e ".[dev]"
+
+# Run the server + dashboard
+python alice_server.py
+# Gradio dashboard: http://localhost:7860
+# API docs:         http://localhost:7860/docs
+```
+
+```python
+import httpx
+
+with httpx.Client(base_url="http://localhost:7860", timeout=30) as env:
+    ep     = env.post("/reset").json()
+    result = env.post("/step", json={
+        "episode_id": ep["episode_id"],
+        "action": "result = sorted([3,1,4,1,5], reverse=True)"
+    }).json()
+    print(result)
 ```
 
 ---
 
-## Key Features
+## Episode Structure
 
-### 1. OpenEnv-Compliant API
-Standard `POST /reset` → `POST /step` → `GET /state` cycle, fully compatible with any OpenEnv client.
+Every ALICE episode is a **3-turn interaction**:
 
-### 2. Chain-of-Thought (CoT) Prompting
-All training prompts wrap tasks in `<task>...</task><reasoning>` tags, encouraging models to reason before answering. The verifier T2 judge uses a CoT rubric scoring correctness, reasoning depth, and conciseness.
+```
+POST /reset
+  └─▶ { episode_id, task, timestamp, agent_version }
 
-### 3. Three-Tier Verifier Stack
-| Tier | What it does |
-|---|---|
-| **T1 — RestrictedPython sandbox** | Safe execution of code answers; catches exceptions, infinite loops |
-| **T2 — Dual LLM judge with CoT** | Two reference models score correctness + reasoning; composite score |
-| **T3 — Regression battery** | 500+ deterministic test cases; hard pass/fail for known questions |
+Turn 1:  POST /step  { episode_id, action }
+  └─▶ { reward, done=False, info: { verification, feedback } }
 
-### 4. Curriculum Manager — Discrimination Zone
-The curriculum auto-escalates difficulty based on the **discrimination zone**: tasks where the model's success rate is between 20% and 80%. Too-easy tasks are retired; too-hard tasks are deferred. This ensures training always happens at the frontier.
+Turn 2:  POST /step  { episode_id, action }   ← uses T1 feedback
+  └─▶ { reward, done=False, info: { verification, feedback } }
 
-### 5. Failure Bank — Novelty Scoring
-Failed episodes are embedded with `sentence-transformers/all-MiniLM-L6-v2` and scored against a k-NN index. Novel failures (novelty > 0.7) are queued for repair. Duplicate failures are suppressed.
+Turn 3:  POST /step  { episode_id, action }   ← final attempt
+  └─▶ { reward, done=True,  info: { verification } }
+```
 
-### 6. GRPO Training (DeepSeek-R1 style)
-Group Relative Policy Optimisation: no value model, no critic. Advantages are normalised within a group of G rollouts from the same prompt. KL penalty keeps the policy close to the reference model.
+Each `action` must be a single Python assignment: `result = <value>`.  
+Rewards are shaped: turn 1 is programmatic pass/fail, turn 2 adds a turn-decay multiplier, turn 3 adds a novelty bonus. The total episode reward is the sum across all turns.
 
-### 7. Leaderboard
-5 benchmark models evaluated in the ALICE RL environment, ranked by composite RL score:
-- `Qwen/Qwen2.5-0.5B-Instruct`
-- `Qwen/Qwen2.5-1.5B-Instruct`
-- `Qwen/Qwen2.5-3B-Instruct`
-- `HuggingFaceTB/SmolLM2-1.7B-Instruct`
-- `google/gemma-3-1b-it`
+---
 
-Users can submit their own model via the Leaderboard tab or `POST /leaderboard/submit`.
+## API Reference
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Server health, uptime, memory, error rate |
+| `GET` | `/state` | Full environment state snapshot |
+| `POST` | `/reset` | Start a new episode; returns task |
+| `POST` | `/step` | Submit an action; returns reward + feedback |
+| `GET` | `/leaderboard` | All leaderboard entries sorted by rl_score |
+| `POST` | `/leaderboard/submit` | Register a model for evaluation |
+| `POST` | `/leaderboard/update` | Push final scores for a model |
+| `POST` | `/training/push` | Push per-episode metrics from a training job |
+| `POST` | `/jobs/register` | Register / update a live HF Job in the dashboard |
+| `GET` | `/jobs` | List all registered training jobs |
+| `GET` | `/failures` | Query the Failure Bank |
+| `GET` | `/docs` | Swagger UI |
+
+### Request / Response Shapes
+
+**`POST /reset`**
+```json
+// Response
+{
+  "episode_id": "abc123...",
+  "task": "Write Python to check if a string is a palindrome.",
+  "timestamp": "2026-04-28T12:00:00Z",
+  "agent_version": "0.0.0"
+}
+```
+
+**`POST /step`**
+```json
+// Request
+{ "episode_id": "abc123...", "action": "result = s == s[::-1]" }
+
+// Response
+{
+  "reward": 0.85,
+  "done": false,
+  "info": {
+    "turn": 1,
+    "verification": {
+      "composite_score": 0.82,
+      "tier1_score": 1.0,
+      "tier2_score": 0.75,
+      "tier3_score": 0.6,
+      "tier1_details": { "success": true, "stdout": "", "error_message": null }
+    },
+    "feedback": "Score 0.82 (T1=1.00 T2=0.75). Improve correctness."
+  }
+}
+```
+
+**`POST /training/push`**
+```json
+{
+  "model_id":           "Qwen/Qwen2.5-0.5B-Instruct",
+  "episode":            12,
+  "rewards":            [0.82, 0.91, 0.45, 0.78],
+  "advantages":         [0.21, 0.43, -0.55, 0.17],
+  "loss":               0.0034,
+  "success_rate":       0.74,
+  "disc_coverage":      0.68,
+  "composites":         [0.80, 0.88, 0.42, 0.76],
+  "cumulative_rewards": [0.74, 0.76, 0.77, 0.79]
+}
+```
+
+---
+
+## Verifier Stack
+
+Every action is graded by a three-tier pipeline. The composite score weights all three tiers:
+
+```
+composite = 0.4 × T1 + 0.4 × T2 + 0.2 × T3
+```
+
+### T1 — RestrictedPython Sandbox
+Executes the agent's Python in an isolated sandbox with:
+- `open`, `exec`, `eval`, `__import__`, `compile` — all blocked
+- 5-second CPU timeout
+- 512 MB memory cap
+- stdout / stderr captured
+
+Returns `tier1_score ∈ {0.0, 1.0}`.
+
+### T2 — Dual LLM Judge (CoT Rubric)
+Two reference models (`REFERENCE_MODEL_PRIMARY`, `REFERENCE_MODEL_SECONDARY`) independently score the response using a chain-of-thought rubric measuring:
+- **Correctness** — is the answer factually right?
+- **Reasoning depth** — does the solution reflect understanding?
+- **Conciseness** — is it direct, without unnecessary output?
+
+Returns `tier2_score ∈ [0.0, 1.0]` as the average of both judges.
+
+### T3 — Regression Battery
+Runs the answer against 20 deterministic variants of the task to measure generalisation. Hard pass/fail on known ground-truth answers.
+
+Returns `tier3_score ∈ [0.0, 1.0]`.
+
+---
+
+## Reward Function
+
+```
+R(turn=1) = tier1_score                              # programmatic pass/fail
+R(turn=2) = γ × composite_score                     # turn-decay (γ < 1)
+R(turn=3) = γ² × composite_score + novelty_bonus    # final attempt + novelty
+```
+
+**Novelty bonus** — failed episodes are embedded with `all-MiniLM-L6-v2` and compared to existing Failure Bank entries via k-NN cosine similarity. High-novelty failures (distance > 0.7) earn a bonus and are queued for repair.
+
+**GRPO advantages** — at the end of each group of G rollouts, advantages are group-normalised:
+
+```
+advantage_i = (reward_i − mean(rewards)) / std(rewards)
+```
+
+If all rollouts in the group achieve the same reward, `std = 0`, all advantages = 0, and no gradient flows. The curriculum intentionally keeps the model in the 20–80% success zone to prevent this.
+
+---
+
+## Curriculum Manager — Discrimination Zone
+
+The curriculum tracks per-task success rates and identifies the **discrimination zone**: tasks the model solves 20–80% of the time. This is the zone of maximum variance in the Bernoulli distribution (`σ² = p(1−p)` is maximised at p=0.5), which gives the strongest gradient signal.
+
+```
+p < 20%  → too hard  (model guesses randomly, no gradient)
+p ∈ 20–80% → discrimination zone  ← train here
+p > 80%  → too easy  (saturated, no gradient)
+```
+
+**Escalation rule:** when discrimination zone coverage exceeds 70% for 50+ consecutive episodes, the difficulty tier increments and harder tasks are introduced. The environment permanently co-evolves with the model.
+
+---
+
+## Failure Bank
+
+Every episode where `composite_score < 0.5` produces a **failure entry**. Before storing it, the Failure Bank:
+
+1. Embeds the task + action using `sentence-transformers/all-MiniLM-L6-v2`
+2. Queries the k-NN index (k=16) for cosine similarity
+3. Computes `novelty = 1 − max_similarity`
+4. **Only stores the failure** if `novelty > 0.7` (genuinely new failure)
+5. Adds it to the repair queue for targeted SFT
+
+This prevents the curriculum from repeatedly testing known failure modes and keeps the bank semantically diverse.
+
+---
+
+## GRPO Training
+
+ALICE uses **Group Relative Policy Optimisation** (DeepSeek-R1 style) — no value network, no critic.
+
+```
+Loss = −mean( advantage_i × log_prob(action_i) ) + KL_coef × log_prob²
+```
+
+The KL term (squared log-prob) penalises large policy updates without needing a separate reference model. `KL_coef` defaults to `0.04`.
+
+**LoRA** — training scripts use Low-Rank Adaptation (`rank=16`, `alpha=32`) targeting `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`. Reduces trainable parameters by ~99%.
 
 ---
 
 ## Training Scripts
 
-### Pure TRL GRPO (`training/train_trl.py`)
+### 1. Free-Tier HF Job (cpu-basic) — `training/hf_cpu_job.py`
+
+Uses the HF Inference API for inference — **no GPU, no credits needed**. Launch directly from the dashboard (Training Metrics → Start Training) or submit manually:
+
+```python
+from huggingface_hub import run_uv_job
+
+job = run_uv_job(
+    "training/hf_cpu_job.py",
+    flavor="cpu-basic",
+    namespace="your-hf-username",
+    env={
+        "HF_SPACE_ID": "rohanjain1648/alice-rl-environment",
+        "MODEL_ID":    "Qwen/Qwen2.5-0.5B-Instruct",
+        "EPISODES":    "50",
+        "MAX_TURNS":   "3",
+    },
+    secrets={"HF_TOKEN": "hf_..."},
+    token="hf_...",
+)
+print(f"Job URL: {job.url}")
+```
+
+Metrics push to `/training/push` in real time — visible in the dashboard immediately.
+
+### 2. GPU Training Job — `training/hf_job_train.py`
+
+Full GRPO with local LoRA fine-tuning. Requires an `a10g-small` (24 GB VRAM) HF Job.
+
+```bash
+ALICE_ENV_URL=https://rohanjain1648-alice-rl-environment.hf.space \
+python training/hf_job_train.py
+```
+
+Environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `MODEL_ID` | `Qwen/Qwen2.5-0.5B-Instruct` | Model to train |
+| `EPISODES` | `100` | Number of episodes |
+| `GROUP_SIZE` | `8` | GRPO group size (rollouts per update) |
+| `MAX_TURNS` | `3` | Turns per episode |
+| `LR` | `1e-5` | Learning rate |
+| `KL_COEF` | `0.04` | KL penalty coefficient |
+| `LORA_R` | `16` | LoRA rank |
+| `LOAD_IN_4BIT` | `0` | 4-bit quantisation (for <24 GB VRAM) |
+| `PUSH_TO_HUB` | `0` | Push LoRA checkpoint to HF Hub after training |
+| `HUB_REPO_ID` | — | Hub repo to push checkpoint to |
+
+### 3. Pure TRL GRPO — `training/train_trl.py`
+
 ```bash
 python training/train_trl.py \
     --model_id Qwen/Qwen2.5-1.5B-Instruct \
@@ -124,38 +430,81 @@ python training/train_trl.py \
     --update_leaderboard
 ```
 
-### Unsloth + TRL GRPO (`training/train_unsloth.py`)
+### 4. Unsloth + TRL — `training/train_unsloth.py`
+
+~2× faster, ~60% less VRAM than standard transformers. Falls back automatically if Unsloth is not installed.
+
 ```bash
 python training/train_unsloth.py \
     --model_id Qwen/Qwen2.5-1.5B-Instruct \
     --episodes 200 \
     --update_leaderboard
 ```
-Unsloth gives ~2× faster training and ~60% less VRAM vs standard transformers. Falls back to standard transformers automatically if Unsloth is not available.
 
 ---
 
 ## Colab Notebooks
 
-| Notebook | Description |
-|---|---|
-| [train_trl_colab.ipynb](notebooks/train_trl_colab.ipynb) | Pure TRL GRPO — runs on free T4 Colab GPU |
-| [train_unsloth_colab.ipynb](notebooks/train_unsloth_colab.ipynb) | Unsloth 4-bit QLoRA + TRL — fastest option |
+| Notebook | Hardware | Description |
+|---|---|---|
+| [alice_full_colab.ipynb](notebooks/alice_full_colab.ipynb) | Free T4 | Full end-to-end: install deps, run server, train, plot results |
+| [train_trl_colab.ipynb](notebooks/train_trl_colab.ipynb) | Free T4 | Pure TRL GRPO against the live HF Space |
+| [train_unsloth_colab.ipynb](notebooks/train_unsloth_colab.ipynb) | Colab Pro A100 | Unsloth 4-bit QLoRA — fastest training path |
 
 ---
 
-## Local Quick Start
+## Dashboard Tabs
 
-```bash
-cd alice_env
-python alice_server.py
-# Gradio dashboard: http://localhost:7860
-# API docs:         http://localhost:7860/docs
+The Gradio dashboard at port 7860 has 8 tabs, all auto-refreshing every 3 seconds:
+
+| Tab | What it shows |
+|---|---|
+| **Mission** | Problem statement, ALICE architecture, research papers, presentation slides, how-to guide |
+| **Overview** | Live episode count, avg reward, success rate, discrimination coverage, health metrics, recent episodes |
+| **Training Metrics** | 4-panel live chart (reward curve + cumulative + distribution + GRPO loss), episode table, "Start Training" button |
+| **Curriculum** | Domain × difficulty heatmap, discrimination zone coverage over time, curriculum info |
+| **HF Space & Jobs** | Space status badge, training job history table with live status |
+| **Failure Bank** | Total failures, avg novelty, repair queue size, filterable failure table |
+| **Leaderboard** | Bar chart + ranked table of all models, model submission form |
+| **Pro Access** | Pricing tiers, contact form |
+
+---
+
+## Leaderboard
+
+5 benchmark models evaluated on ALICE, ranked by composite RL score:
+
+```
+rl_score = 0.5 × avg_reward + 0.3 × success_rate + 0.2 × disc_coverage
 ```
 
-Training against local server:
-```bash
-ALICE_ENV_URL=http://localhost:7860 python training/train_trl.py --model_id Qwen/Qwen2.5-0.5B-Instruct
+| Rank | Model | Params | rl_score | avg_reward | success_rate | disc_coverage | Episodes |
+|---|---|---|---|---|---|---|---|
+| 1 | Qwen2.5-0.5B | 0.5B | 1.1189 | 1.6549 | 0.7375 | 0.7362 | 150 |
+| 2 | Qwen2.5-3B | 3.0B | 0.8992 | 1.4278 | 0.5800 | 0.2550 | 50 |
+| 3 | Qwen2.5-1.5B | 1.5B | 0.5251 | 0.8515 | 0.1775 | 0.1450 | 50 |
+| 4 | SmolLM2-1.7B | 1.7B | 0.3015 | 0.5279 | 0.0825 | 0.0625 | 50 |
+| 5 | Gemma-3-1B | 1.0B | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 50 |
+
+### Submit Your Model
+
+**Via the Dashboard** — open the Leaderboard tab, enter your model ID, and click Submit & Eval. A free-tier HF Job is submitted automatically; results appear in the table when the job completes.
+
+**Via API:**
+```python
+import httpx
+
+resp = httpx.post(
+    "https://rohanjain1648-alice-rl-environment.hf.space/leaderboard/submit",
+    json={
+        "model_id":    "your-org/your-model",
+        "display_name": "My Model",
+        "params_b":    0.5,
+        "episodes":    50,
+    }
+).json()
+print(resp)
+# { "status": "submitted", "job_id": "...", "job_url": "https://huggingface.co/jobs/..." }
 ```
 
 ---
@@ -164,19 +513,33 @@ ALICE_ENV_URL=http://localhost:7860 python training/train_trl.py --model_id Qwen
 
 | Variable | Default | Description |
 |---|---|---|
-| `ALICE_ENV_URL` | `http://localhost:7860` | ALICE server URL |
-| `OPENAI_API_KEY` | — | OpenAI key for T2 LLM judge |
-| `HF_TOKEN` | — | HF write token for checkpoint push |
-| `HF_SPACE_ID` | — | `username/space-name` for HF Space link |
-| `ALICE_HF_REPO_ID` | — | Training Space ID for HF Jobs tab |
-| `REFERENCE_MODEL_PRIMARY` | `gpt-4o-mini` | Primary reference model for T2 judge |
-| `REFERENCE_MODEL_SECONDARY` | `Qwen/Qwen2.5-72B` | Secondary reference model |
-| `LEADERBOARD_PATH` | `data/leaderboard.json` | Leaderboard persistence path |
-| `PORT` | `7860` | Server port |
+| `HF_TOKEN` | — | HF token. Required for submitting HF Jobs and pushing checkpoints. |
+| `HF_SPACE_ID` | `rohanjain1648/alice-rl-environment` | Space ID used to construct job URLs and API base URL. |
+| `ALICE_HF_REPO_ID` | — | Training Space ID shown in the HF Jobs tab. |
+| `REFERENCE_MODEL_PRIMARY` | `gpt-4o-mini` | Primary LLM for the T2 judge. |
+| `REFERENCE_MODEL_SECONDARY` | `Qwen/Qwen2.5-72B` | Secondary LLM for the T2 judge. |
+| `OPENAI_API_KEY` | — | Required if using OpenAI models as T2 judges. |
+| `LEADERBOARD_PATH` | `data/leaderboard.json` | Path for leaderboard persistence. |
+| `PORT` | `7860` | Server port. |
+| `ALICE_ENV_URL` | `http://localhost:7860` | Used by training scripts to locate the environment server. |
 
 ---
 
-## Deploy to HF Spaces
+## Deployment
+
+### Hugging Face Spaces (Docker)
+
+The Space runs the `Dockerfile` in the repo root. Push to the `main` branch of your HF Space to trigger a rebuild:
+
+```bash
+# Add the HF Space as a remote (one-time)
+git remote add hf https://<username>:<HF_TOKEN>@huggingface.co/spaces/<username>/alice-rl-environment
+
+# Push
+git push hf your-branch:main
+```
+
+Or use the deploy script:
 
 ```bash
 HF_SPACE_ID=rohanjain1648/alice-rl-environment \
@@ -184,4 +547,138 @@ HF_TOKEN=hf_... \
 bash scripts/deploy_spaces.sh
 ```
 
-The Dockerfile uses a two-stage build: builder installs all deps into `/app/.venv`, runtime copies only the virtualenv — keeping the image lean.
+The Dockerfile uses a two-stage build: a `builder` stage installs all Python deps (including the optional Unsloth GPU stack) into `/app/.venv`, and a lean `runtime` stage copies only the venv — keeping the image small. On GPU-capable hardware, Unsloth installs automatically; on CPU-only builds, it silently falls back to standard transformers.
+
+### Local Docker
+
+```bash
+docker build -t alice-env:latest .
+docker run --rm -p 7860:7860 \
+  -e HF_TOKEN=hf_... \
+  -e OPENAI_API_KEY=sk_... \
+  alice-env:latest
+```
+
+### Without Docker
+
+```bash
+pip install -e ".[dev]"
+uvicorn alice_server:app --host 0.0.0.0 --port 7860
+```
+
+---
+
+## Testing
+
+```bash
+# All tests
+pytest tests/ -v
+
+# API endpoint tests
+pytest tests/test_server.py -v
+
+# End-to-end episode lifecycle
+pytest tests/test_integration.py -v
+
+# Reward function + curriculum invariants
+pytest tests/test_properties.py -v
+```
+
+Health check:
+```bash
+curl https://rohanjain1648-alice-rl-environment.hf.space/health
+# { "uptime": 3600, "error_rate": 0.0, "latency_p95": 0.21, "memory_usage": 142.3 }
+```
+
+---
+
+## Project Structure
+
+```
+ALICE_final/
+├── alice_server.py          # Main entry point — FastAPI + Gradio in one file
+├── Dockerfile               # Two-stage production build
+├── pyproject.toml           # Package manifest and dependencies
+├── openenv.yaml             # OpenEnv spec descriptor
+│
+├── environment/             # Core RL environment logic
+│   ├── episode_handler.py   # 3-turn episode lifecycle
+│   ├── verifier_stack.py    # T1 / T2 / T3 verification pipeline
+│   ├── reward_function.py   # Bellman-shaped GRPO reward
+│   ├── curriculum_manager.py# Discrimination zone + difficulty escalation
+│   ├── task_generator.py    # Hunt (adversarial) + Repair (SFT pairs)
+│   ├── failure_bank.py      # k-NN novelty scoring + repair queue
+│   ├── oracle_interface.py  # Reference model calibration (HF Inference API)
+│   ├── leaderboard.py       # In-memory leaderboard + JSON persistence
+│   └── state.py             # MDP state vector definition
+│
+├── training/
+│   ├── hf_cpu_job.py        # Free-tier HF Job (cpu-basic, Inference API)
+│   ├── hf_job_train.py      # GPU training job (LoRA + GRPO)
+│   ├── train_trl.py         # Pure TRL GRPO trainer
+│   └── train_unsloth.py     # Unsloth + TRL (fastest on GPU)
+│
+├── monitors/
+│   ├── entropy_monitor.py   # DAPO collapse detection
+│   ├── sandbox.py           # RestrictedPython execution sandbox
+│   └── trajectory_sampler.py# Anomaly detection (5% sample)
+│
+├── notebooks/
+│   ├── alice_full_colab.ipynb
+│   ├── train_trl_colab.ipynb
+│   └── train_unsloth_colab.ipynb
+│
+├── scripts/
+│   ├── launch_hf_job.py     # CLI wrapper for HF Job submission
+│   ├── deploy_spaces.sh     # Push to HF Space
+│   └── verify_spaces.sh     # Health-check the deployed Space
+│
+├── tests/
+│   ├── test_server.py
+│   ├── test_integration.py
+│   └── test_properties.py
+│
+├── images/                  # Static assets for dashboard + README
+├── data/                    # Runtime data (leaderboard.json — not committed)
+└── PROJECT_STRUCTURE.md     # Detailed description of every file and folder
+```
+
+See [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for a detailed description of every file.
+
+---
+
+## Research Foundation
+
+ALICE synthesises ideas from several lines of prior work:
+
+| Strategy | Original Work | ALICE's version |
+|---|---|---|
+| RLHF | InstructGPT (Ouyang et al., 2022) | Oracle discrimination reward |
+| Constitutional AI | Anthropic (Bai et al., 2022) | Verifier stack as constitution |
+| Self-play | SPAG (Cheng et al., 2024) | Hunt agent in discrimination zone |
+| Curriculum Learning | Bengio et al., 2009 | 20–80% success rate zone |
+| Dynamic Benchmarks | ARC-AGI | Auto-generated from model's own failures |
+| GRPO | DeepSeek-R1 (Guo et al., 2025) | Group-normalised advantages, no critic |
+
+---
+
+## Citation
+
+```bibtex
+@software{alice_rl_environment,
+  title  = {ALICE: Adversarial Loop for Inter-model Co-evolutionary Environment},
+  author = {Banerjee, Debdeep and Jain, Rohan},
+  year   = {2026},
+  url    = {https://huggingface.co/spaces/rohanjain1648/alice-rl-environment}
+}
+```
+
+---
+
+## License
+
+BSD-3-Clause. See [LICENSE](LICENSE) for details.
+
+---
+
+*Built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv) — the open standard for LLM RL environments.*

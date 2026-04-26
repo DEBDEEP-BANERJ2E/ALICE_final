@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# Environment secrets
+.env
+*.env
+
+# IDE / editor
+.kiro/
+.vscode/
+.idea/
+
+# Runtime data (generated at startup, not source)
+data/leaderboard.json
+data/failure_bank/
+data/trajectories/
+logs/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# uv
+.uv/
