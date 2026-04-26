@@ -24,6 +24,16 @@ RUN uv venv /app/.venv && \
         "matplotlib>=3.7.0" \
         "python-dateutil>=2.9.0"
 
+# Install GPU training stack (torch + unsloth); skip silently on CPU-only builds
+RUN VIRTUAL_ENV=/app/.venv uv pip install --no-cache \
+        "torch>=2.1.0" \
+        "transformers>=4.40.0" \
+        "trl>=0.8.0" \
+        "accelerate>=0.26.0" \
+    && VIRTUAL_ENV=/app/.venv uv pip install --no-cache \
+        "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" \
+    || echo "Unsloth install skipped (no CUDA at build time — will fall back to standard transformers)"
+
 # ── Stage 2: minimal runtime image ────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 

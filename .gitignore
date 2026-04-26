@@ -24,6 +24,7 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+!alice_env/notebooks/*.ipynb
 
 # Testing
 .pytest_cache/

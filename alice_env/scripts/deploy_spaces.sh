@@ -44,7 +44,7 @@ require_cmd() {
 }
 
 # ── Pre-flight checks ──────────────────────────────────────────────────────────
-require_cmd huggingface-cli
+require_cmd hf
 require_cmd curl
 
 log "Deploying ALICE RL Environment"
@@ -53,7 +53,7 @@ log "  Space URL: $SPACE_URL"
 
 # Authenticate
 log "Authenticating with Hugging Face..."
-alice_env/.venv/bin/hf auth login --token "$HF_TOKEN" 2>/dev/null || true
+hf auth login --token "$HF_TOKEN" 2>/dev/null || true
 
 # ── Rollback mode ─────────────────────────────────────────────────────────────
 if [ "$ROLLBACK_MODE" = "true" ]; then
@@ -61,27 +61,32 @@ if [ "$ROLLBACK_MODE" = "true" ]; then
     log "ROLLBACK MODE: reverting Space '$HF_SPACE_ID' to commit $ROLLBACK_SHA"
     TMPDIR=$(mktemp -d)
     log "Downloading revision $ROLLBACK_SHA to $TMPDIR..."
-    alice_env/.venv/bin/hf download \
+    hf download \
         "$HF_SPACE_ID" \
         --repo-type space \
         --revision "$ROLLBACK_SHA" \
         --token "$HF_TOKEN" \
         --local-dir "$TMPDIR"
     log "Re-uploading revision $ROLLBACK_SHA to Space..."
-    alice_env/.venv/bin/hf upload \
-        "$HF_SPACE_ID" \
-        "$TMPDIR" \
-        . \
-        --repo-type space \
-        --token "$HF_TOKEN" \
-        --commit-message "Rollback to $ROLLBACK_SHA [$(date -u '+%Y-%m-%dT%H:%M:%SZ')]"
+    .venv/bin/python - <<PYEOF
+import os
+from huggingface_hub import HfApi
+api = HfApi()
+api.upload_folder(
+    folder_path="$TMPDIR",
+    repo_id="$HF_SPACE_ID",
+    repo_type="space",
+    token="$HF_TOKEN",
+    commit_message="Rollback to $ROLLBACK_SHA",
+)
+PYEOF
     rm -rf "$TMPDIR"
     log "Rollback push complete. Space is rebuilding..."
 else
 
 # ── Step 1: Create Space (idempotent) ─────────────────────────────────────────
 log "Creating Space '$HF_SPACE_ID' (skips if already exists)..."
-alice_env/.venv/bin/hf repo create "$HF_SPACE_ID" \
+hf repo create "$HF_SPACE_ID" \
     --type space \
     --space-sdk docker \
     --token "$HF_TOKEN" \
@@ -92,7 +97,7 @@ alice_env/.venv/bin/hf repo create "$HF_SPACE_ID" \
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ALICE_ENV_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-PREV_SHA=$(alice_env/.venv/bin/python -c "
+PREV_SHA=$(.venv/bin/python -c "
 from huggingface_hub import HfApi
 import os, sys
 try:
@@ -110,18 +115,45 @@ fi
 
 # ── Step 3: Push alice_env/ contents to the Space ─────────────────────────────
 log "Pushing '$ALICE_ENV_DIR' to Space repository..."
-alice_env/.venv/bin/hf upload \
-    "$HF_SPACE_ID" \
-    "$ALICE_ENV_DIR" \
-    . \
-    --repo-type space \
-    --token "$HF_TOKEN" \
-    --commit-message "Deploy ALICE RL Environment [$(date -u '+%Y-%m-%dT%H:%M:%SZ')]" \
-    --exclude ".venv/**" \
-    --exclude ".pytest_cache/**" \
-    --exclude "__pycache__/**" \
-    --exclude "*.pyc" \
-    --exclude ".cache/**"
+.venv/bin/python - <<'PYEOF'
+import os, sys
+from huggingface_hub import HfApi
+
+api = HfApi()
+space_id = os.environ["HF_SPACE_ID"]
+token = os.environ["HF_TOKEN"]
+alice_env_dir = os.path.abspath(".")
+
+ignore_patterns = [
+    ".venv/**",
+    "**/.venv/**",
+    "__pycache__/**",
+    "**/__pycache__/**",
+    "*.pyc",
+    "**/*.pyc",
+    ".pytest_cache/**",
+    "**/.pytest_cache/**",
+    ".cache/**",
+    "**/.cache/**",
+    "*.egg-info/**",
+    "**/*.egg-info/**",
+    "uv.lock",
+    ".git/**",
+    "data/**",
+    "checkpoints/**",
+]
+
+print(f"Uploading {alice_env_dir} → {space_id} (excluding .venv and caches)...")
+api.upload_folder(
+    folder_path=alice_env_dir,
+    repo_id=space_id,
+    repo_type="space",
+    token=token,
+    ignore_patterns=ignore_patterns,
+    commit_message="Deploy ALICE RL Environment",
+)
+print("Upload complete.")
+PYEOF
 
 log "Push complete. Space is now building..."
 fi  # end rollback / normal-deploy branch

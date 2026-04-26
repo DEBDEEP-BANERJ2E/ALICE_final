@@ -136,6 +136,9 @@ class VerifierStack:
         self._regression_baseline: float = 1.0
         self._episode_count: int = 0          # tracks episodes for auto-trigger
         self._t2_cache: Dict[str, Dict[str, Any]] = {}  # output cache for Tier 2
+        # Thread pool for non-blocking failure bank insertions
+        from concurrent.futures import ThreadPoolExecutor
+        self._fb_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fb-insert")
 
     # ------------------------------------------------------------------
     # Public API
@@ -217,13 +220,16 @@ class VerifierStack:
         exception_container: Dict[str, Any] = {}
 
         def _run() -> None:
-            # Best-effort memory limit via resource module (UNIX only)
-            try:
-                import resource as _resource
-                limit = SANDBOX_MEMORY_MB * 1024 * 1024
-                _resource.setrlimit(_resource.RLIMIT_AS, (limit, limit))
-            except Exception:
-                pass  # not supported on this platform
+            # Memory limit via resource module — skip on HF Spaces (SPACE_ID is set by HF)
+            # because setrlimit(RLIMIT_AS, 512MB) limits the whole process, crashing the server.
+            is_hf_space = bool(os.getenv("SPACE_ID") or os.getenv("SPACE_AUTHOR_NAME"))
+            if not is_hf_space:
+                try:
+                    import resource as _resource
+                    limit = SANDBOX_MEMORY_MB * 1024 * 1024
+                    _resource.setrlimit(_resource.RLIMIT_AS, (limit, limit))
+                except Exception:
+                    pass
 
             captured_stdout = io.StringIO()
             captured_stderr = io.StringIO()
@@ -458,14 +464,15 @@ class VerifierStack:
         return {c: 0.5 for c in criteria}
 
     def _handle_failure(self, agent_output: str, result: Dict[str, Any], task: str = "") -> None:
-        """Add failed output to Failure Bank if available."""
+        """Add failed output to Failure Bank if available (non-blocking)."""
         if self._failure_bank is not None:
-            self._failure_bank.add_failure({
+            payload = {
                 "prompt": task,
                 "actual_output": agent_output,
                 "verification_result": result,
                 "error_type": "verification_failure",
-            })
+            }
+            self._fb_executor.submit(self._failure_bank.add_failure, payload)
 
     @staticmethod
     def _build_reasoning(t1: float, t2: Optional[float], t3: Optional[float],

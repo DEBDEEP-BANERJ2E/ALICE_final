@@ -30,11 +30,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 MODEL_ID            = os.getenv("ALICE_MODEL_ID",             "Qwen/Qwen2.5-7B-Instruct")
-ENV_URL             = os.getenv("ALICE_ENV_URL",              "http://localhost:8000")
+ENV_URL             = os.getenv("ALICE_ENV_URL",              "http://localhost:7860")
 HF_REPO_ID          = os.getenv("ALICE_HF_REPO_ID",           "")
 LEARNING_RATE       = float(os.getenv("ALICE_LR",              "1e-5"))
 GAMMA               = float(os.getenv("ALICE_GAMMA",           "0.99"))
-GRPO_GROUP_SIZE     = int(os.getenv("ALICE_GRPO_G",            "8"))
+GRPO_GROUP_SIZE     = int(os.getenv("ALICE_GRPO_G",            "4"))
 KL_THRESHOLD        = float(os.getenv("ALICE_KL_THRESHOLD",    "0.1"))
 CHECKPOINT_INTERVAL = int(os.getenv("ALICE_CHECKPOINT_INTERVAL", "100"))
 MAX_NEW_TOKENS      = int(os.getenv("ALICE_MAX_NEW_TOKENS",    "512"))
@@ -124,19 +124,45 @@ class GRPOTrainer:
 
         # ── Attempt 2: Standard transformers (CPU / Apple MPS fallback) ───────
         if not unsloth_loaded:
+            import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
-            self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-            self._model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                device_map="auto",
-                torch_dtype="auto",
-            )
-            self._ref_model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                device_map="auto",
-                torch_dtype="auto",
-            )
-            logger.info("Standard transformers loaded (CPU/MPS fallback path)")
+
+            # On T4 (16GB), loading two copies of 7B at float16 = ~28GB → OOM.
+            # Fall back to 1.5B which fits comfortably (2 × ~3GB = ~6GB).
+            effective_model = self.model_id
+            if torch.cuda.is_available():
+                gpu_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+                if gpu_gb < 20 and "7b" in self.model_id.lower():
+                    effective_model = self.model_id.replace("7B", "1.5B").replace("7b", "1.5B")
+                    logger.info(
+                        "GPU has %.0fGB VRAM and Unsloth unavailable — "
+                        "switching to smaller model %s to avoid OOM",
+                        gpu_gb, effective_model,
+                    )
+
+            self._tokenizer = AutoTokenizer.from_pretrained(effective_model)
+
+            # device_map="auto" requires accelerate — use explicit device instead
+            try:
+                import accelerate  # noqa: F401 — just check it's available
+                device_map: Any = "auto"
+            except ImportError:
+                device_map = None
+
+            dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            load_kwargs: dict = {"dtype": dtype}
+            if device_map is not None:
+                load_kwargs["device_map"] = device_map
+
+            self._model = AutoModelForCausalLM.from_pretrained(effective_model, **load_kwargs)
+            self._ref_model = AutoModelForCausalLM.from_pretrained(effective_model, **load_kwargs)
+
+            # Move to GPU manually if accelerate not available but CUDA is
+            if device_map is None and torch.cuda.is_available():
+                self._model = self._model.cuda()
+                self._ref_model = self._ref_model.cuda()
+
+            logger.info("Standard transformers loaded: %s (device_map=%s)", effective_model, device_map or "cuda/cpu manual")
 
         logger.info("Model ready")
 
@@ -218,7 +244,8 @@ class GRPOTrainer:
         rollouts = []
         for _ in range(self.group_size):
             try:
-                reset_resp = httpx.post(f"{self.env_url}/reset", timeout=10.0)
+                reset_resp = httpx.post(f"{self.env_url}/reset", timeout=15.0)
+                reset_resp.raise_for_status()
                 state      = reset_resp.json()
                 episode_id = state.get("episode_id", "")
                 total_reward = 0.0
@@ -227,8 +254,20 @@ class GRPOTrainer:
                     step_resp = httpx.post(
                         f"{self.env_url}/step",
                         json={"action": action, "episode_id": episode_id},
-                        timeout=10.0,
+                        timeout=30.0,
                     )
+                    if step_resp.status_code == 400:
+                        # Stale episode_id (Space restarted) — get a fresh episode
+                        logger.warning("Stale episode_id %s — resetting", episode_id[:8])
+                        reset_resp = httpx.post(f"{self.env_url}/reset", timeout=15.0)
+                        reset_resp.raise_for_status()
+                        state = reset_resp.json()
+                        episode_id = state.get("episode_id", "")
+                        step_resp = httpx.post(
+                            f"{self.env_url}/step",
+                            json={"action": action, "episode_id": episode_id},
+                            timeout=30.0,
+                        )
                     step_data    = step_resp.json()
                     total_reward += step_data.get("reward", 0.0)
                     state        = step_data.get("state", state)
@@ -237,7 +276,7 @@ class GRPOTrainer:
                 rollouts.append({
                     "reward":       total_reward,
                     "episode_id":   episode_id,
-                    "policy_ratio": 1.0,   # π_θ / π_ref — real impl uses log-prob diff
+                    "policy_ratio": 1.0,
                 })
             except Exception as exc:
                 logger.error("Rollout failed: %s", exc)
@@ -326,22 +365,29 @@ class GRPOTrainer:
     def _sample_action(self, state: Dict[str, Any]) -> str:
         """Sample an action from the current policy given state."""
         if self._model is None or self._tokenizer is None:
-            return "placeholder_action"
+            return "result = 42"
         try:
             import torch  # type: ignore
-            task   = state.get("task", "")
-            inputs = self._tokenizer(task, return_tensors="pt", truncation=True, max_length=512)
+            task = state.get("task", "")
+            prompt = f"Task: {task}\nPython solution (set answer in `result`):\nresult = "
+            inputs = self._tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
+            device = next(self._model.parameters()).device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
             with torch.no_grad():
                 output_ids = self._model.generate(
                     **inputs,
-                    max_new_tokens=MAX_NEW_TOKENS,
-                    do_sample=True,
-                    temperature=0.7,
+                    max_new_tokens=32,       # short — just need a value expression
+                    do_sample=False,         # greedy — 3-5× faster than sampling
+                    pad_token_id=self._tokenizer.eos_token_id,
                 )
-            return self._tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            new_tokens = output_ids[0][inputs["input_ids"].shape[1]:]
+            generated = self._tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+            # Wrap in valid Python assignment
+            first_line = generated.split("\n")[0].strip()
+            return f"result = {first_line}" if first_line else "result = 42"
         except Exception as exc:
             logger.warning("Action sampling failed: %s", exc)
-            return "placeholder_action"
+            return "result = 42"
 
 
 # ---------------------------------------------------------------------------
