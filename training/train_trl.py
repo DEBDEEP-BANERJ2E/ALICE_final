@@ -80,8 +80,20 @@ def env_step(episode_id: str, action: str) -> dict:
     return r.json()
 
 
-def leaderboard_update(model_id: str, avg_reward: float, success_rate: float,
-                        disc_cov: float, episodes: int):
+def push_metrics(model_id, ep, rewards, advantages, loss, avg_succ, disc, cumul):
+    try:
+        httpx.post(f"{ENV_URL}/training/push", json={
+            "model_id": model_id, "episode": ep,
+            "rewards": [round(float(r),4) for r in rewards],
+            "advantages": [round(float(a),4) for a in advantages],
+            "loss": round(float(loss),6),
+            "success_rate": round(avg_succ,4),
+            "disc_coverage": round(disc,4),
+            "composites": [],
+            "cumulative_rewards": [round(float(r),4) for r in cumul],
+        }, timeout=5.0)
+    except Exception as exc:
+        log.warning("push_metrics failed: %s", exc)
     try:
         httpx.post(
             f"{ENV_URL}/leaderboard/update",
@@ -152,20 +164,42 @@ class RolloutBatch:
     episode_ids: List[str]
 
 
-def _sample_response(model, tokenizer, prompt: str, max_new_tokens: int) -> str:
+def _sample_response(model, tokenizer, task: str, feedback: str,
+                      max_new_tokens: int) -> str:
+    """Generate result = ... Python answer using chat template."""
+    _SYSTEM = (
+        "You are a precise Python solver. "
+        "Output ONLY: result = <value>. No explanations."
+    )
+    messages = [{"role": "system", "content": _SYSTEM}]
+    if feedback:
+        messages += [
+            {"role": "user",      "content": f"Task: {task}"},
+            {"role": "assistant", "content": "result = ..."},
+            {"role": "user",      "content": f"Feedback: {feedback}\nTask: {task}"},
+        ]
+    else:
+        messages.append({"role": "user", "content": f"Task: {task}"})
+    try:
+        prompt = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True)
+        prompt += "result ="
+    except Exception:
+        prompt = f"{_SYSTEM}\n\nTask: {task}\nresult ="
+
     device = next(model.parameters()).device
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
     with torch.no_grad():
         out = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            temperature=0.8,
-            top_p=0.9,
+            **inputs, max_new_tokens=max_new_tokens,
+            do_sample=True, temperature=0.7, top_p=0.92,
+            repetition_penalty=1.1,
             pad_token_id=tokenizer.pad_token_id,
         )
-    gen_ids = out[0][inputs["input_ids"].shape[1]:]
-    return tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+    raw = tokenizer.decode(out[0][inputs["input_ids"].shape[1]:],
+                           skip_special_tokens=True).strip()
+    first = raw.split("\n")[0].strip()
+    return first if first.startswith("result") else f"result = {first[:200]}"
 
 
 def collect_rollouts(model, tokenizer, group_size: int,
@@ -179,18 +213,22 @@ def collect_rollouts(model, tokenizer, group_size: int,
             task  = ep["task"]
             total_reward = 0.0
             last_action  = ""
+            feedback     = ""
 
             for turn in range(max_turns):
-                # Chain-of-thought prompt: model reasons before answering
-                cot_prompt = (
-                    f"<task>{task}</task>\n"
-                    f"Think step by step, then give your final answer.\n"
-                    f"<reasoning>"
-                )
-                action = _sample_response(model, tokenizer, cot_prompt, max_new_tokens)
+                action = _sample_response(model, tokenizer, task, feedback, max_new_tokens)
                 result = env_step(ep_id, action)
                 total_reward += result["reward"]
                 last_action   = action
+                verif = result.get("info", {}).get("verification", {})
+                composite = verif.get("composite_score", 0.0)
+                if composite >= 0.5:
+                    feedback = f"Turn {turn+1} passed (score={composite:.2f})."
+                else:
+                    t1 = verif.get("tier1_details", {}) or {}
+                    feedback = (f"Error: {t1.get('error_message','unknown')}. Fix the code."
+                                if not t1.get("success", True)
+                                else f"Score {composite:.2f}. Improve correctness.")
                 if result.get("done"):
                     break
 
@@ -252,6 +290,7 @@ def train(args):
     all_rewards:  List[float] = []
     all_successes: List[float] = []
     disc_coverage: float = 0.0
+    cumul: List[float] = []
 
     log.info("Starting TRL-style GRPO training | model=%s | episodes=%d",
              args.model_id, args.episodes)
@@ -269,21 +308,22 @@ def train(args):
         loss = grpo_update(model, tokenizer, optimizer, batch, args.kl_coef)
 
         all_rewards.extend(batch.rewards)
-        # Treat reward > 0.3 as success (mirrors ALICE's threshold logic)
         all_successes.extend([1.0 if r > 0.3 else 0.0 for r in batch.rewards])
+        ep_mean_r = float(sum(batch.rewards) / max(len(batch.rewards), 1))
+        cumul.append(ep_mean_r)
 
-        # Fetch live discrimination coverage
-        try:
-            state = httpx.get(f"{ENV_URL}/health", timeout=5.0).json()
-            disc_coverage = state.get("disc_coverage", disc_coverage)
-        except Exception:
-            pass
+        avg_r    = sum(all_rewards[-80:]) / max(len(all_rewards[-80:]), 1)
+        avg_succ = sum(all_successes[-80:]) / max(len(all_successes[-80:]), 1)
 
-        avg_r     = sum(all_rewards[-50:]) / max(len(all_rewards[-50:]), 1)
-        avg_succ  = sum(all_successes[-50:]) / max(len(all_successes[-50:]), 1)
+        # GRPO advantages for push
+        import numpy as _np
+        r_arr = _np.array(batch.rewards, dtype=_np.float32)
+        adv   = ((r_arr - r_arr.mean()) / (_np.std(r_arr) + 1e-6)).tolist()
 
-        log.info("Episode %4d | loss=%.4f | avg_reward=%.4f | success=%.2f%%",
-                 ep, loss, avg_r, avg_succ * 100)
+        log.info("Episode %4d | loss=%.4f | ep_r=%.4f | avg_reward=%.4f | success=%.2f%%",
+                 ep, loss, ep_mean_r, avg_r, avg_succ * 100)
+
+        push_metrics(args.model_id, ep, batch.rewards, adv, loss, avg_succ, disc_coverage, cumul)
 
         if args.update_leaderboard and ep % 10 == 0:
             leaderboard_update(args.model_id, avg_r, avg_succ, disc_coverage, ep)
