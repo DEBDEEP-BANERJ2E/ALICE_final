@@ -330,11 +330,69 @@ async def submit_model(req: LeaderboardSubmitRequest):
 
 
 # ---------------------------------------------------------------------------
+# Training push endpoint — feeds live training metrics into dashboard graphs
+# ---------------------------------------------------------------------------
+
+class TrainingPushRequest(BaseModel):
+    model_id:       str
+    episode:        int
+    rewards:        list        # per-rollout rewards this episode
+    advantages:     list        # GRPO advantages
+    loss:           float
+    success_rate:   float
+    disc_coverage:  float
+    composites:     list = []   # per-rollout composite scores
+
+
+@api.post("/training/push")
+async def training_push(req: TrainingPushRequest):
+    """Called by training scripts every episode to feed live data into dashboard."""
+    # Feed rewards into episode history so graphs populate
+    ts = datetime.now(timezone.utc).isoformat()
+    for i, r in enumerate(req.rewards):
+        _episode_history.append({
+            "episode_id": f"{req.model_id[:8]}-ep{req.episode}-r{i}",
+            "task":       f"[training] ep={req.episode} rollout={i}",
+            "timestamp":  ts,
+            "difficulty": 0.0,
+            "reward":     round(float(r), 4),
+        })
+    if len(_episode_history) > 200:
+        del _episode_history[:len(_episode_history) - 200]
+
+    # Feed disc coverage into history
+    _disc_history.append(float(req.disc_coverage))
+
+    # Feed advantages and loss
+    for a in req.advantages:
+        _adv_hist.append(float(a))
+    if req.loss is not None:
+        _loss_hist.append(float(req.loss))
+
+    # Also update leaderboard
+    lb = _get_leaderboard()
+    avg_r = float(sum(req.rewards) / max(len(req.rewards), 1))
+    lb.update_model_score(
+        req.model_id, avg_r, req.success_rate,
+        req.disc_coverage, req.episode,
+    )
+
+    return {
+        "status":        "ok",
+        "episode":       req.episode,
+        "rewards_added": len(req.rewards),
+        "avg_reward":    round(avg_r, 4),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Gradio dashboard — tabbed analytics
 # ---------------------------------------------------------------------------
 
-_disc_history: Deque[float] = deque(maxlen=200)
-_reward_hist:  Deque[float] = deque(maxlen=200)
+_disc_history:  Deque[float] = deque(maxlen=200)
+_reward_hist:   Deque[float] = deque(maxlen=200)
+_adv_hist:      Deque[float] = deque(maxlen=400)   # GRPO advantages
+_loss_hist:     Deque[float] = deque(maxlen=200)   # training loss
 
 _CSS = """
 .tab-nav button { font-size: 14px; font-weight: 600; }
@@ -417,21 +475,57 @@ def _reward_fig():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    fig, axes = plt.subplots(1, 2, figsize=(11, 3))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 7))
+    axes = axes.flatten()
+
+    # 1. Reward over time with moving average
     if _reward_hist:
-        axes[0].hist(_reward_hist, bins=min(20, max(5, len(_reward_hist))),
+        xs = list(range(len(_reward_hist)))
+        ys = list(_reward_hist)
+        axes[0].plot(xs, ys, color="#4a90e2", linewidth=0.9, alpha=0.4, label="raw")
+        if len(ys) >= 5:
+            w = min(10, len(ys))
+            ma = np.convolve(ys, np.ones(w)/w, mode="valid")
+            axes[0].plot(range(w-1, len(ys)), ma, color="#4a90e2", linewidth=2.2, label=f"{w}-ep MA")
+        axes[0].axhline(0, color="gray", linestyle="--", alpha=0.5)
+        axes[0].fill_between(xs, ys, alpha=0.1, color="#4a90e2")
+        axes[0].legend(fontsize=8)
+    axes[0].set_xlabel("Rollout"); axes[0].set_ylabel("Reward")
+    axes[0].set_title("Reward Over Time", fontweight="bold")
+
+    # 2. Reward distribution (histogram)
+    if _reward_hist:
+        axes[1].hist(list(_reward_hist), bins=min(25, max(5, len(_reward_hist))),
                      color="#4a90e2", edgecolor="white", alpha=0.85)
-    axes[0].set_xlabel("Reward")
-    axes[0].set_ylabel("Count")
-    axes[0].set_title("Reward Distribution", fontweight="bold")
-    if _reward_hist:
-        axes[1].plot(range(len(_reward_hist)), _reward_hist,
-                     color="#4a90e2", linewidth=1.3, alpha=0.9)
-        axes[1].fill_between(range(len(_reward_hist)), _reward_hist,
-                              alpha=0.15, color="#4a90e2")
-    axes[1].set_xlabel("Episode")
-    axes[1].set_ylabel("Reward")
-    axes[1].set_title("Reward Over Time", fontweight="bold")
+        axes[1].axvline(float(np.mean(list(_reward_hist))), color="red",
+                        linestyle="--", linewidth=1.5,
+                        label=f"mean={np.mean(list(_reward_hist)):.3f}")
+        axes[1].axvline(0, color="gray", linestyle="--", alpha=0.5)
+        axes[1].legend(fontsize=8)
+    axes[1].set_xlabel("Reward"); axes[1].set_ylabel("Count")
+    axes[1].set_title("Reward Distribution", fontweight="bold")
+
+    # 3. GRPO advantage distribution
+    if _adv_hist:
+        axes[2].hist(list(_adv_hist), bins=min(30, max(5, len(_adv_hist))),
+                     color="#9b59b6", edgecolor="white", alpha=0.85)
+        axes[2].axvline(0, color="red", linestyle="--", alpha=0.7, label="zero")
+        axes[2].legend(fontsize=8)
+    axes[2].set_xlabel("Advantage"); axes[2].set_ylabel("Count")
+    axes[2].set_title("GRPO Advantage Distribution", fontweight="bold")
+
+    # 4. Training loss over time
+    if _loss_hist:
+        xs = list(range(len(_loss_hist)))
+        ys = list(_loss_hist)
+        axes[3].plot(xs, ys, color="#e74c3c", linewidth=1.5, alpha=0.8)
+        if len(ys) >= 5:
+            w = min(5, len(ys))
+            ma = np.convolve(ys, np.ones(w)/w, mode="valid")
+            axes[3].plot(range(w-1, len(ys)), ma, color="#c0392b", linewidth=2.2)
+    axes[3].set_xlabel("Episode"); axes[3].set_ylabel("Loss")
+    axes[3].set_title("Training Loss (GRPO)", fontweight="bold")
+
     plt.tight_layout()
     return fig
 
