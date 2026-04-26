@@ -684,20 +684,34 @@ def _reward_fig():
     fig, axes = plt.subplots(2, 2, figsize=(12, 7))
     axes = axes.flatten()
 
-    # 1. Reward curve per episode
+    # 1. Reward curve per episode + cumulative reward sum (dual axis)
     if _cumul_hist:
-        xs = list(range(1, len(_cumul_hist) + 1))
-        ys = list(_cumul_hist)
-        axes[0].plot(xs, ys, color="#4a90e2", linewidth=1.0, alpha=0.4, label="per-episode")
+        xs     = list(range(1, len(_cumul_hist) + 1))
+        ys     = list(_cumul_hist)
+        cumsum = list(np.cumsum(ys))
+
+        axes[0].plot(xs, ys, alpha=0.35, color="#4a90e2", linewidth=0.8, label="per-ep mean")
         if len(ys) >= 3:
-            w = min(5, len(ys))
+            w  = min(5, len(ys))
             ma = np.convolve(ys, np.ones(w)/w, mode="valid")
-            axes[0].plot(range(w, len(ys) + 1), ma, color="#4a90e2", linewidth=2.5, label=f"{w}-ep MA")
+            axes[0].plot(range(w, len(ys) + 1), ma, color="#4a90e2",
+                         linewidth=2.5, label=f"{w}-ep MA")
         axes[0].axhline(0, color="gray", linestyle="--", alpha=0.5)
-        axes[0].fill_between(xs, ys, alpha=0.1, color="#4a90e2")
-        axes[0].legend(fontsize=8)
-    axes[0].set_xlabel("Episode"); axes[0].set_ylabel("Mean Reward")
-    axes[0].set_title("Reward Curve (per episode)", fontweight="bold")
+        axes[0].fill_between(xs, ys, alpha=0.08, color="#4a90e2")
+        axes[0].set_ylabel("Mean Reward / Episode", color="#4a90e2")
+        axes[0].tick_params(axis="y", labelcolor="#4a90e2")
+
+        ax0r = axes[0].twinx()
+        ax0r.plot(xs, cumsum, color="#FF9D00", linewidth=2.0,
+                  linestyle="--", label="cumulative sum")
+        ax0r.set_ylabel("Cumulative Reward", color="#FF9D00")
+        ax0r.tick_params(axis="y", labelcolor="#FF9D00")
+
+        lines1, labels1 = axes[0].get_legend_handles_labels()
+        lines2, labels2 = ax0r.get_legend_handles_labels()
+        axes[0].legend(lines1 + lines2, labels1 + labels2, fontsize=7, loc="upper left")
+    axes[0].set_xlabel("Episode")
+    axes[0].set_title("Reward Curve + Cumulative Reward", fontweight="bold")
 
     # 2. Reward distribution histogram
     if _reward_hist:
