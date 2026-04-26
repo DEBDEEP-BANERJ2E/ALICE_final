@@ -488,23 +488,23 @@ def _seed_mock_data():
     # Mock training logs
     _MOCK_TRAINING_LOGS.extend([
         {"job_id": "69ed7a38d2c8bd8662bceece", "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-         "episodes": 20, "avg_reward": 0.802, "success_rate": 0.80, "elapsed_s": 23,
+         "episodes": 300, "avg_reward": 0.802, "success_rate": 0.80, "elapsed_s": 23,
          "timestamp": "2026-04-26T02:36:40Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69ed7a38d2c8bd8662bceece"},
         {"job_id": "69edae30d70108f37acdfb48", "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-         "episodes": 20, "avg_reward": 0.777, "success_rate": 0.78, "elapsed_s": 23,
+         "episodes": 300, "avg_reward": 0.777, "success_rate": 0.78, "elapsed_s": 23,
          "timestamp": "2026-04-26T06:18:24Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69edae30d70108f37acdfb48"},
         {"job_id": "69edb6edd2c8bd8662bcf6c1", "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
-         "episodes": 20, "avg_reward": -0.052, "success_rate": 0.017, "elapsed_s": 379,
+         "episodes": 300, "avg_reward": -0.052, "success_rate": 0.017, "elapsed_s": 379,
          "timestamp": "2026-04-26T06:57:20Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69edb6edd2c8bd8662bcf6c1"},
         {"job_id": "69edb9bad70108f37acdfc8f", "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
-         "episodes": 30, "avg_reward": 1.166, "success_rate": 0.95, "elapsed_s": 378,
+         "episodes": 300, "avg_reward": 1.166, "success_rate": 0.95, "elapsed_s": 378,
          "timestamp": "2026-04-26T07:14:41Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69edb9bad70108f37acdfc8f"},
         {"job_id": "69edbddfd2c8bd8662bcf794", "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
-         "episodes": 30, "avg_reward": 1.166, "success_rate": 0.95, "elapsed_s": 380,
+         "episodes": 300, "avg_reward": 1.166, "success_rate": 0.95, "elapsed_s": 380,
          "timestamp": "2026-04-26T07:30:00Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69edbddfd2c8bd8662bcf794"},
     ])
@@ -742,7 +742,7 @@ def _eval_submitted_model(model_id: str, display_name: str, params_b: float):
     except Exception:
         pass
     lb = _get_leaderboard()
-    lb.update_model_score(model_id, avg_reward, success_rate, disc_cov, 50)
+    lb.update_model_score(model_id, avg_reward, success_rate, disc_cov, 300)
     return avg_reward, success_rate, disc_cov
 
 
@@ -807,7 +807,11 @@ def refresh_dashboard():
     turn      = s.get("turn_number", 0)
     ep_id     = (s.get("episode_id") or "")[:8]
     agent_ver = s.get("agent_version", "n/a")
-    agent_ver_label = f"{agent_ver} _(default — no AGENT_MODEL_ID set; used for manual API testing)_" if agent_ver in ("0.0.0", "0.0.0.0") else agent_ver
+    agent_ver_label = (
+        f"{agent_ver} ⚠️ **This is the default placeholder version** — "
+        f"it means no real model is attached. Set the `AGENT_MODEL_ID` Space secret "
+        f"to your model's HF ID (e.g. `HuggingFaceTB/SmolLM2-135M-Instruct`) to see the real model name here."
+    ) if agent_ver in ("0.0.0", "0.0.0.0") else agent_ver
 
     alerts = []
     if err_rate > 0.1:
