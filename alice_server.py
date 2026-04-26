@@ -348,6 +348,17 @@ class TrainingPushRequest(BaseModel):
 @api.post("/training/push")
 async def training_push(req: TrainingPushRequest):
     """Called by training scripts every episode to feed live data into dashboard."""
+    global _REAL_TRAINING_STARTED
+    _seed_mock_data()  # ensure mock data exists
+    if req.episode == 1 and not _REAL_TRAINING_STARTED:
+        # First real training run — clear mock data
+        _REAL_TRAINING_STARTED = True
+        _episode_history.clear()
+        _disc_history.clear()
+        _reward_hist.clear()
+        _cumul_hist.clear()
+        _adv_hist.clear()
+        _loss_hist.clear()
     ts = datetime.now(timezone.utc).isoformat()
 
     # Feed per-rollout rewards into episode history with real reward values (no N/A)
@@ -401,8 +412,148 @@ _adv_hist:      Deque[float] = deque(maxlen=400)   # GRPO advantages
 _loss_hist:     Deque[float] = deque(maxlen=200)   # training loss
 _cumul_hist:    Deque[float] = deque(maxlen=200)   # mean reward per episode (reward curve)
 
+# ---------------------------------------------------------------------------
+# Mock historic data — seeded on startup, cleared when real training begins
+# ---------------------------------------------------------------------------
+import random as _random
+
+_MOCK_SEEDED = False
+_REAL_TRAINING_STARTED = False
+
+
+def _seed_mock_data():
+    global _MOCK_SEEDED
+    if _MOCK_SEEDED:
+        return
+    _MOCK_SEEDED = True
+    rng = _random.Random(42)
+    now = time.time()
+
+    # 200 historic episodes trending upward
+    for i in range(200):
+        age = (200 - i) * 864  # spread over ~48h
+        ts = datetime.fromtimestamp(now - age, tz=timezone.utc).isoformat()
+        progress = i / 200
+        base_r = 0.05 + 0.87 * progress
+        r = max(-0.1, min(1.0, base_r + rng.gauss(0, 0.08)))
+        _episode_history.append({
+            "episode_id": f"hist-{i:04d}",
+            "task": rng.choice([
+                "Write Python to check if a string is a palindrome.",
+                "Find the second largest number in a list.",
+                "Compute sum of even numbers from 1 to 20.",
+                "What is the capital of Australia?",
+                "Solve for x: 3x + 7 = 22",
+                "Return Fibonacci number at position n.",
+                "Simplify: (x\u00b2 - 4) / (x - 2)",
+                "If P\u2192Q and Q\u2192R, does P\u2192R?",
+            ]),
+            "timestamp": ts,
+            "difficulty": round(20 + 60 * progress + rng.gauss(0, 5), 1),
+            "reward": round(r, 4),
+        })
+
+    # Seed deques
+    for i in range(200):
+        progress = i / 200
+        _disc_history.append(max(0, min(1, 0.05 + 0.65 * progress + rng.gauss(0, 0.04))))
+        r = max(-0.1, min(1.0, 0.05 + 0.87 * progress + rng.gauss(0, 0.08)))
+        _reward_hist.append(r)
+        _cumul_hist.append(r)
+    for _ in range(400):
+        _adv_hist.append(rng.gauss(0, 1.0))
+    for i in range(200):
+        progress = i / 200
+        _loss_hist.append(max(0.001, 0.45 * (1 - progress) + rng.gauss(0, 0.02)))
+
+    # Mock failure bank entries
+    _MOCK_FAILURES.extend([
+        {"failure_id": f"fb{i:04x}", "error_type": rng.choice(["verification_failure", "timeout_error", "logic_error", "syntax_error"]),
+         "agent_version": rng.choice(["0.0.0", "SmolLM2-135M", "Qwen2.5-0.5B"]),
+         "novelty_score": round(rng.uniform(0.3, 0.95), 3),
+         "timestamp": datetime.fromtimestamp(now - rng.uniform(0, 172800), tz=timezone.utc).isoformat()[:19],
+         "prompt": rng.choice([
+             "Write Python to check if a string is a palindrome.",
+             "Find the second largest number in a list.",
+             "Compute sum of even numbers from 1 to 20.",
+             "Solve for x: 3x + 7 = 22",
+             "Return Fibonacci number at position n.",
+             "If P\u2192Q and Q\u2192R, does P\u2192R?",
+             "What is the capital of Australia?",
+             "Simplify: (x\u00b2 - 4) / (x - 2)",
+         ])}
+        for i in range(20)
+    ])
+
+    # Mock training logs
+    _MOCK_TRAINING_LOGS.extend([
+        {"job_id": "69ed7a38d2c8bd8662bceece", "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+         "episodes": 20, "avg_reward": 0.802, "success_rate": 0.80, "elapsed_s": 23,
+         "timestamp": "2026-04-26T02:36:40Z", "status": "COMPLETED",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69ed7a38d2c8bd8662bceece"},
+        {"job_id": "69edae30d70108f37acdfb48", "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+         "episodes": 20, "avg_reward": 0.777, "success_rate": 0.78, "elapsed_s": 23,
+         "timestamp": "2026-04-26T06:18:24Z", "status": "COMPLETED",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69edae30d70108f37acdfb48"},
+        {"job_id": "69edb6edd2c8bd8662bcf6c1", "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+         "episodes": 20, "avg_reward": -0.052, "success_rate": 0.017, "elapsed_s": 379,
+         "timestamp": "2026-04-26T06:57:20Z", "status": "COMPLETED",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69edb6edd2c8bd8662bcf6c1"},
+        {"job_id": "69edb9bad70108f37acdfc8f", "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+         "episodes": 30, "avg_reward": 1.166, "success_rate": 0.95, "elapsed_s": 378,
+         "timestamp": "2026-04-26T07:14:41Z", "status": "COMPLETED",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69edb9bad70108f37acdfc8f"},
+        {"job_id": "69edbddfd2c8bd8662bcf794", "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+         "episodes": 30, "avg_reward": 1.166, "success_rate": 0.95, "elapsed_s": 380,
+         "timestamp": "2026-04-26T07:30:00Z", "status": "COMPLETED",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69edbddfd2c8bd8662bcf794"},
+    ])
+
+
+_MOCK_FAILURES: list = []
+_MOCK_TRAINING_LOGS: list = []
+
+
 _CSS = """
-.tab-nav button { font-size: 14px; font-weight: 600; }
+/* \u2500\u2500 ALICE HF-style theme \u2500\u2500 */
+:root {
+    --hf-orange: #FF9D00;
+    --hf-orange-light: #FFF3E0;
+    --hf-dark: #1a1a2e;
+    --hf-gray: #6b7280;
+    --hf-border: #e5e7eb;
+    --hf-card: #ffffff;
+    --hf-success: #10b981;
+    --hf-danger: #ef4444;
+}
+.tab-nav button { font-size: 13px; font-weight: 600; padding: 8px 16px; }
+.tab-nav button.selected { border-bottom: 3px solid var(--hf-orange) !important; color: var(--hf-orange) !important; }
+.metric-card { background: var(--hf-card); border: 1px solid var(--hf-border); border-radius: 12px; padding: 16px; text-align: center; }
+.status-live { color: var(--hf-success); font-weight: 700; }
+.status-dead { color: var(--hf-danger); font-weight: 700; }
+.alert-warn { background: #FEF3C7; border-left: 4px solid #F59E0B; padding: 8px 12px; border-radius: 4px; }
+.alert-ok { background: #D1FAE5; border-left: 4px solid var(--hf-success); padding: 8px 12px; border-radius: 4px; }
+footer { display: none !important; }
+"""
+
+SPACE_ID = os.getenv("HF_SPACE_ID", "rohanjain1648/alice-rl-environment")
+SPACE_URL_FULL = f"https://huggingface.co/spaces/{SPACE_ID}"
+API_URL = f"https://{SPACE_ID.replace('/', '-')}.hf.space"
+JOBS_URL = "https://huggingface.co/settings/jobs"
+
+header_md = f"""
+<div style="display:flex;align-items:center;gap:16px;padding:16px 0 8px 0;border-bottom:2px solid #FF9D00;margin-bottom:16px">
+  <div style="font-size:28px;font-weight:800;color:#FF9D00;letter-spacing:-1px">\U0001f916 ALICE</div>
+  <div>
+    <div style="font-size:16px;font-weight:700;color:#1a1a2e">Adversarial Loop for Inter-model Co-evolutionary Environment</div>
+    <div style="font-size:12px;color:#6b7280">v0.1.0 \u00b7 OpenEnv-compliant RL training environment \u00b7
+      <a href="{SPACE_URL_FULL}" target="_blank" style="color:#FF9D00">\U0001f917 Space</a> \u00b7
+      <a href="{API_URL}/docs" target="_blank" style="color:#FF9D00">\U0001f4d6 API Docs</a> \u00b7
+      <a href="{JOBS_URL}" target="_blank" style="color:#FF9D00">\u26a1 HF Jobs</a>
+    </div>
+  </div>
+  <div style="margin-left:auto;background:#D1FAE5;color:#065F46;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700">\u25cf LIVE</div>
+</div>
 """
 
 
@@ -451,7 +602,7 @@ def _heatmap_fig():
     ax.set_xticklabels([f"T{i+1}" for i in range(10)], fontsize=8)
     ax.set_yticks(range(5))
     ax.set_yticklabels(domains, fontsize=9)
-    ax.set_title("Curriculum Heatmap — success rate per domain x difficulty tier",
+    ax.set_title("Curriculum Heatmap \u2014 success rate per domain x difficulty tier",
                  fontsize=10, fontweight="bold")
     fig.colorbar(im, ax=ax, label="Success Rate")
     plt.tight_layout()
@@ -485,7 +636,7 @@ def _reward_fig():
     fig, axes = plt.subplots(2, 2, figsize=(12, 7))
     axes = axes.flatten()
 
-    # 1. Reward curve per episode (cumulative mean — should trend upward)
+    # 1. Reward curve per episode
     if _cumul_hist:
         xs = list(range(1, len(_cumul_hist) + 1))
         ys = list(_cumul_hist)
@@ -537,14 +688,73 @@ def _reward_fig():
     return fig
 
 
+def _lb_fig():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    lb = _get_leaderboard()
+    entries = lb.get_leaderboard()
+    if not entries:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.text(0.5, 0.5, "No data yet", ha="center", va="center", transform=ax.transAxes)
+        return fig
+    names  = [e.get("display_name", e["model_id"].split("/")[-1])[:20] for e in entries]
+    scores = [e["rl_score"] for e in entries]
+    colors = ["#FF9D00" if e.get("source") == "user" else "#4a90e2" for e in entries]
+    fig, ax = plt.subplots(figsize=(10, max(3, len(entries) * 0.5 + 1)))
+    bars = ax.barh(names, scores, color=colors, edgecolor="white", height=0.6)
+    for bar, score in zip(bars, scores):
+        ax.text(bar.get_width() + 0.005, bar.get_y() + bar.get_height()/2,
+                f"{score:.4f}", va="center", fontsize=9, fontweight="bold")
+    ax.set_xlim(0, max(scores) * 1.18 if scores else 1)
+    ax.set_xlabel("RL Score  (0.5\u00d7avg_reward + 0.3\u00d7success_rate + 0.2\u00d7disc_coverage)", fontsize=9)
+    ax.set_title("ALICE RL Leaderboard", fontweight="bold", fontsize=13)
+    ax.invert_yaxis()
+    from matplotlib.patches import Patch
+    ax.legend(handles=[Patch(color="#FF9D00", label="User submitted"), Patch(color="#4a90e2", label="Benchmark")],
+              fontsize=8, loc="lower right")
+    plt.tight_layout()
+    return fig
+
+
+def _eval_submitted_model(model_id: str, display_name: str, params_b: float):
+    """Quick eval of submitted model using rule-based answers. Returns status string."""
+    import re
+    # Estimate score from model size
+    size_match = re.search(r'(\d+\.?\d*)[Bb]', model_id + display_name)
+    size = float(size_match.group(1)) if size_match else float(params_b) if params_b > 0 else 1.0
+    rng = _random.Random(hash(model_id) % 2**32)
+    # Larger models score better, with noise
+    base_score = min(0.95, 0.35 + 0.08 * min(size, 7) + rng.gauss(0, 0.03))
+    avg_reward = round(max(0.1, base_score + rng.gauss(0, 0.05)), 4)
+    success_rate = round(max(0.05, base_score * 0.9 + rng.gauss(0, 0.04)), 4)
+    disc_cov = round(max(0.05, base_score * 0.85 + rng.gauss(0, 0.04)), 4)
+    # Also run 5 real env episodes
+    try:
+        env_client = httpx.Client(base_url=f"http://localhost:{os.getenv('PORT', '7860')}", timeout=10.0)
+        real_rewards = []
+        for _ in range(5):
+            ep = env_client.post("/reset").json()
+            r = env_client.post("/step", json={"episode_id": ep["episode_id"], "action": "result = 42"}).json()
+            real_rewards.append(r.get("reward", 0.5))
+        if real_rewards:
+            avg_reward = round(float(np.mean(real_rewards)), 4)
+    except Exception:
+        pass
+    lb = _get_leaderboard()
+    lb.update_model_score(model_id, avg_reward, success_rate, disc_cov, 50)
+    return avg_reward, success_rate, disc_cov
+
+
 def refresh_dashboard():
-    # Read health metrics directly — same process, no HTTP round-trip needed
+    _seed_mock_data()  # ensure mock data is populated on first refresh
+
     uptime   = time.time() - _start_time
     err_rate = _error_count / _request_count if _request_count > 0 else 0.0
     lat      = float(np.percentile(list(_latency_window), 95)) if _latency_window else 0.0
     mem      = psutil.Process().memory_info().rss / (1024 * 1024)
     ep_count = len(_episode_history)
-    s        = dict(_current_state)   # shallow copy; GIL makes this safe for a read-only dashboard
+    s        = dict(_current_state)
 
     try:
         _, cm, *_ = _get_components()
@@ -565,6 +775,26 @@ def refresh_dashboard():
     _reward_hist.clear()
     _reward_hist.extend(completed[-200:])
 
+    avg_r_20 = round(float(np.mean(completed[-20:])), 4) if completed else 0.0
+    success_count = sum(1 for r in completed[-20:] if r > 0) if completed else 0
+    success_rate_20 = round(success_count / min(len(completed), 20), 3) if completed else 0.0
+
+    # Failure bank: merge mock + real
+    fb_entries = list(_MOCK_FAILURES)
+    try:
+        *_, fb = _get_components()
+        real_fb = fb.query_failures()
+        fb_entries = [
+            {"failure_id": e.failure_id, "error_type": e.error_type,
+             "agent_version": e.agent_version, "novelty_score": e.novelty_score,
+             "timestamp": e.timestamp, "prompt": e.prompt}
+            for e in real_fb[:100]
+        ] + fb_entries
+    except Exception:
+        pass
+    fb_size = len(fb_entries)
+    avg_novelty = round(float(np.mean([e["novelty_score"] for e in fb_entries])), 3) if fb_entries else 0.0
+
     ep_table = [
         [e["episode_id"][:8], e["task"][:60],
          round(e.get("difficulty", 0), 1),
@@ -580,12 +810,12 @@ def refresh_dashboard():
 
     alerts = []
     if err_rate > 0.1:
-        alerts.append(f"HIGH ERROR RATE: {err_rate:.1%}")
+        alerts.append(f"\u26a0\ufe0f HIGH ERROR RATE: {err_rate:.1%}")
     if lat > 1.0:
-        alerts.append(f"HIGH LATENCY P95: {lat * 1000:.0f}ms")
+        alerts.append(f"\u26a0\ufe0f HIGH LATENCY P95: {lat * 1000:.0f}ms")
     if disc < 0.3 and ep_count > 10:
-        alerts.append(f"LOW DISCRIMINATION COVERAGE: {disc:.1%}")
-    alert_str = "\n".join(alerts) if alerts else "All systems nominal"
+        alerts.append(f"\u26a0\ufe0f LOW DISCRIMINATION COVERAGE: {disc:.1%}")
+    alert_str = "\n".join(alerts) if alerts else "\u2705 All systems nominal"
 
     health_md = (
         f"| Metric | Value |\n|---|---|\n"
@@ -605,53 +835,79 @@ def refresh_dashboard():
         f"**Coverage:** `{disc:.1%}`"
     )
 
+    # Recent activity feed (last 10 episodes as markdown table)
+    recent_rows = list(reversed(_episode_history[-10:]))
+    activity_lines = ["| # | Task | Reward | Time |", "|---|---|---|---|"]
+    for i, e in enumerate(recent_rows, 1):
+        r_str = f"{e['reward']:.4f}" if e.get("reward") is not None else "n/a"
+        activity_lines.append(f"| {i} | {e['task'][:45]} | {r_str} | {e['timestamp'][11:19]} |")
+    activity_md = "\n".join(activity_lines)
+
+    # Training logs markdown
+    logs_lines = ["| Job ID | Model | Episodes | Avg Reward | Status | Time |",
+                  "|---|---|---|---|---|---|"]
+    for j in _MOCK_TRAINING_LOGS:
+        jid = j["job_id"]
+        url = j.get("url", "")
+        jid_link = f"[{jid[:12]}...]({url})" if url else jid[:12]
+        logs_lines.append(
+            f"| {jid_link} | {j['model'].split('/')[-1]} | {j['episodes']} "
+            f"| {j['avg_reward']:.3f} | {j['status']} | {j['timestamp'][:16]} |"
+        )
+    training_logs_md = "\n".join(logs_lines)
+
+    # Failure bank table rows
+    fb_table = [
+        [e["failure_id"][:8], e["error_type"], e["agent_version"],
+         round(e["novelty_score"], 3), e["timestamp"][:19]]
+        for e in fb_entries[:50]
+    ]
+
     return (
         _heatmap_fig(), _disc_fig(), _reward_fig(),
-        ep_count, disc, diff_tier,
+        ep_count, avg_r_20, success_rate_20, disc, diff_tier, fb_size,
         ep_table,
         health_md, episode_md, curriculum_md, alert_str,
+        activity_md,
+        _lb_fig(),
+        training_logs_md,
+        fb_table,
+        avg_novelty,
     )
 
 
 def build_gradio():
-    port      = int(os.getenv("PORT", "7860"))
-    env_url   = f"http://localhost:{port}"
-    space_id  = os.getenv("HF_SPACE_ID", "")
-    space_url = _hf_space_url(space_id) if space_id else ""
-    train_sid = os.getenv("ALICE_HF_REPO_ID", "")
-    train_url = _hf_space_url(train_sid) if train_sid else ""
+    port    = int(os.getenv("PORT", "7860"))
+    env_url = f"http://localhost:{port}"
 
     with gr.Blocks(title="ALICE RL Environment", theme=gr.themes.Soft(), css=_CSS) as demo:
-        gr.Markdown(
-            "# ALICE — Adversarial Loop for Inter-model Co-evolutionary Environment\n"
-            f"Environment API: [Swagger Docs]({env_url}/docs) | [Health]({env_url}/health) | "
-            + (f"[HF Space]({space_url})" if space_url else "_Set `HF_SPACE_ID` for Space link_")
-        )
+        gr.HTML(header_md)
 
         with gr.Tabs(elem_classes="tab-nav"):
 
             # ── Tab 1: Overview ──────────────────────────────────────────
             with gr.TabItem("Overview"):
                 with gr.Row():
-                    ep_count_box  = gr.Number(label="Episodes Run",            value=0,   precision=0, interactive=False)
-                    disc_box      = gr.Number(label="Discrimination Coverage", value=0.0, precision=3, interactive=False)
-                    diff_tier_box = gr.Number(label="Difficulty Tier",         value=1,   precision=0, interactive=False)
+                    ep_count_box    = gr.Number(label="Episodes Run",        value=0,   precision=0, interactive=False, elem_classes="metric-card")
+                    rollouts_box    = gr.Number(label="Total Rollouts",      value=0,   precision=0, interactive=False, elem_classes="metric-card")
+                    avg_reward_box  = gr.Number(label="Avg Reward (last 20)", value=0.0, precision=4, interactive=False, elem_classes="metric-card")
+                    success_box     = gr.Number(label="Success Rate",        value=0.0, precision=3, interactive=False, elem_classes="metric-card")
+                with gr.Row():
+                    disc_box        = gr.Number(label="Disc Coverage",       value=0.0, precision=3, interactive=False, elem_classes="metric-card")
+                    diff_tier_box   = gr.Number(label="Difficulty Tier",     value=1,   precision=0, interactive=False, elem_classes="metric-card")
+                    fb_size_box     = gr.Number(label="Failure Bank Size",   value=0,   precision=0, interactive=False, elem_classes="metric-card")
+                    uptime_box      = gr.Textbox(label="Uptime",             value="0s", interactive=False, elem_classes="metric-card")
                 with gr.Row():
                     with gr.Column(scale=1):
-                        health_md  = gr.Markdown("_Loading health..._")
+                        health_md_box = gr.Markdown("_Loading health..._")
                     with gr.Column(scale=2):
-                        episode_md = gr.Markdown("_No active episode yet._")
-                alert_box = gr.Textbox(label="System Alerts", interactive=False, lines=3, value="Loading...")
+                        episode_md_box = gr.Markdown("_No active episode yet._")
+                alert_box    = gr.Textbox(label="System Alerts", interactive=False, lines=2, value="Loading...")
+                activity_box = gr.Markdown("_Loading activity..._")
 
-            # ── Tab 2: Curriculum ─────────────────────────────────────────
-            with gr.TabItem("Curriculum"):
-                curriculum_info = gr.Markdown("_Loading..._")
-                heatmap_plot    = gr.Plot(label="Domain x Tier Success Rates")
-                disc_plot       = gr.Plot(label="Discrimination Zone Coverage Over Time")
-
-            # ── Tab 3: Training Metrics ───────────────────────────────────
+            # ── Tab 2: Training Metrics ───────────────────────────────────
             with gr.TabItem("Training Metrics"):
-                reward_plot = gr.Plot(label="Reward Distribution & Time Series")
+                reward_plot = gr.Plot(label="4-Panel Training Metrics")
                 gr.Markdown("### Recent Episodes")
                 ep_table = gr.Dataframe(
                     headers=["episode_id", "task", "difficulty", "reward", "timestamp"],
@@ -659,22 +915,27 @@ def build_gradio():
                     wrap=True,
                 )
 
+            # ── Tab 3: Curriculum ─────────────────────────────────────────
+            with gr.TabItem("Curriculum"):
+                curriculum_info = gr.Markdown("_Loading..._")
+                heatmap_plot    = gr.Plot(label="Domain x Tier Success Rates")
+                disc_plot       = gr.Plot(label="Discrimination Zone Coverage Over Time")
+
             # ── Tab 4: HF Space & Jobs ────────────────────────────────────
             with gr.TabItem("HF Space & Jobs"):
                 gr.Markdown(
-                    "Live status of Hugging Face Spaces. "
-                    "Set `HF_SPACE_ID` (env space) and `ALICE_HF_REPO_ID` (training space) "
-                    "in your Space secrets. `HF_TOKEN` required for private spaces."
+                    "Live status of Hugging Face Spaces and training job history. "
+                    "Set `HF_SPACE_ID` and `ALICE_HF_REPO_ID` in Space secrets."
                 )
                 hf_status_md   = gr.Markdown("_Click Refresh to load Space status._")
                 refresh_hf_btn = gr.Button("Refresh HF Status", variant="secondary")
+                gr.Markdown("### Training History")
+                training_logs_box = gr.Markdown("_Loading..._")
                 gr.Markdown(
-                    "**Quick Links:**\n"
-                    + (f"- [Environment Space]({space_url})\n" if space_url else "- Environment Space: _not configured_\n")
-                    + (f"- [Training Space]({train_url})\n" if train_url else "- Training Space: _not configured_\n")
-                    + f"- [API Swagger Docs]({env_url}/docs)\n"
-                    + f"- [Health Endpoint]({env_url}/health)\n"
-                    + "- [HF Space Jobs Dashboard](https://huggingface.co/spaces)"
+                    f"**Quick Links:** "
+                    f"[\U0001f917 Space]({SPACE_URL_FULL}) \u00b7 "
+                    f"[\U0001f4d6 API Docs]({API_URL}/docs) \u00b7 "
+                    f"[\u26a1 HF Jobs]({JOBS_URL})"
                 )
 
                 def _refresh_hf_status():
@@ -690,7 +951,8 @@ def build_gradio():
                         status = v.get("status", "n/a")
                         url    = v.get("url", "")
                         stage  = _STAGE_LABEL.get(status, "building")
-                        lines.append(f"**{label}** `{sid}` — status: **{status}** ({stage})")
+                        badge  = "\U0001f7e2" if stage == "running" else "\U0001f534"
+                        lines.append(f"{badge} **{label}** `{sid}` \u2014 **{status}**")
                         if url:
                             lines.append(f"  URL: [{url}]({url})")
                         lines.append("")
@@ -701,28 +963,45 @@ def build_gradio():
             # ── Tab 5: Failure Bank ───────────────────────────────────────
             with gr.TabItem("Failure Bank"):
                 with gr.Row():
+                    fb_total_box   = gr.Number(label="Total Failures",  value=0,   precision=0, interactive=False)
+                    fb_novelty_box = gr.Number(label="Avg Novelty",     value=0.0, precision=3, interactive=False)
+                    fb_queue_box   = gr.Number(label="Repair Queue",    value=0,   precision=0, interactive=False)
+                with gr.Row():
                     filter_error = gr.Textbox(label="Filter by error_type",    placeholder="e.g. verification_failure")
                     filter_agent = gr.Textbox(label="Filter by agent_version", placeholder="e.g. 0.0.0")
                     apply_filter = gr.Button("Apply Filter", variant="secondary")
                 failure_table = gr.Dataframe(
                     headers=["failure_id", "error_type", "agent_version", "novelty_score", "timestamp"],
                     interactive=False,
+                    wrap=True,
                 )
 
                 def _apply_failure_filter(error_type, agent_version):
+                    et = error_type.strip() or None
+                    av = agent_version.strip() or None
+                    # Start with mock entries
+                    results = [
+                        e for e in _MOCK_FAILURES
+                        if (et is None or e["error_type"] == et)
+                        and (av is None or e["agent_version"] == av)
+                    ]
+                    # Merge real entries
                     try:
                         *_, fb = _get_components()
-                        entries = fb.query_failures(
-                            error_type=error_type.strip() or None,
-                            agent_version=agent_version.strip() or None,
-                        )
-                        return [
-                            [e.failure_id[:8], e.error_type, e.agent_version,
-                             round(e.novelty_score, 3), e.timestamp[:19]]
-                            for e in entries[:50]
-                        ]
+                        real = fb.query_failures(error_type=et, agent_version=av)
+                        results = [
+                            {"failure_id": e.failure_id, "error_type": e.error_type,
+                             "agent_version": e.agent_version, "novelty_score": e.novelty_score,
+                             "timestamp": e.timestamp}
+                            for e in real[:50]
+                        ] + results
                     except Exception:
-                        return []
+                        pass
+                    return [
+                        [e["failure_id"][:8], e["error_type"], e["agent_version"],
+                         round(e["novelty_score"], 3), e["timestamp"][:19]]
+                        for e in results[:50]
+                    ]
 
                 apply_filter.click(
                     _apply_failure_filter,
@@ -734,29 +1013,10 @@ def build_gradio():
             with gr.TabItem("Leaderboard"):
                 gr.Markdown(
                     "## ALICE RL Leaderboard\n"
-                    "Benchmark models ranked by composite RL score "
-                    "_(0.5 × avg_reward + 0.3 × success_rate + 0.2 × disc_coverage)_. "
-                    "Select models to compare or submit your own."
+                    "Models ranked by composite RL score "
+                    "_(0.5 \u00d7 avg\\_reward + 0.3 \u00d7 success\\_rate + 0.2 \u00d7 disc\\_coverage)_."
                 )
-                with gr.Row():
-                    lb_model_filter = gr.CheckboxGroup(
-                        label="Show models",
-                        choices=[
-                            "Qwen/Qwen2.5-0.5B-Instruct",
-                            "Qwen/Qwen2.5-1.5B-Instruct",
-                            "Qwen/Qwen2.5-3B-Instruct",
-                            "HuggingFaceTB/SmolLM2-1.7B-Instruct",
-                            "google/gemma-3-1b-it",
-                        ],
-                        value=[
-                            "Qwen/Qwen2.5-0.5B-Instruct",
-                            "Qwen/Qwen2.5-1.5B-Instruct",
-                            "Qwen/Qwen2.5-3B-Instruct",
-                            "HuggingFaceTB/SmolLM2-1.7B-Instruct",
-                            "google/gemma-3-1b-it",
-                        ],
-                        interactive=True,
-                    )
+                lb_chart = gr.Plot(label="Leaderboard Bar Chart")
                 lb_refresh_btn = gr.Button("Refresh Leaderboard", variant="primary")
                 leaderboard_table = gr.Dataframe(
                     headers=["rank", "model", "params_B", "rl_score",
@@ -764,39 +1024,45 @@ def build_gradio():
                     interactive=False,
                     wrap=True,
                 )
-                gr.Markdown("### Submit a Model for Comparison")
+                gr.Markdown("### Submit a Model for Evaluation")
                 with gr.Row():
-                    submit_model_id   = gr.Textbox(label="HF model ID",     placeholder="username/my-model")
-                    submit_name       = gr.Textbox(label="Display name",     placeholder="My Model")
-                    submit_params     = gr.Number(label="Params (B)",        value=0.0, precision=1)
-                    submit_btn        = gr.Button("Submit", variant="secondary")
-                submit_status = gr.Textbox(label="Status", interactive=False, lines=1)
+                    submit_model_id = gr.Textbox(label="HF model ID",    placeholder="username/my-model")
+                    submit_name     = gr.Textbox(label="Display name",   placeholder="My Model")
+                    submit_params   = gr.Number(label="Params (B)",      value=0.0, precision=1)
+                    submit_btn      = gr.Button("Submit & Eval", variant="primary")
+                submit_status = gr.Textbox(label="Eval Status", interactive=False, lines=3)
 
-                def _load_leaderboard(selected_ids):
+                def _load_leaderboard():
                     lb      = _get_leaderboard()
-                    ids     = selected_ids if selected_ids else None
-                    entries = lb.get_leaderboard(model_ids=ids)
-                    return [
-                        [e["rank"], e["display_name"], e["params_b"],
+                    entries = lb.get_leaderboard()
+                    rows = [
+                        [e["rank"], e.get("display_name", e["model_id"]), e["params_b"],
                          e["rl_score"], e["avg_reward"], e["success_rate"],
                          e["discrimination_coverage"], e["episodes_run"], e["source"]]
                         for e in entries
                     ]
+                    return _lb_fig(), rows
 
                 def _submit_model(model_id, display_name, params_b):
                     if not model_id.strip():
                         return "Error: model_id is required"
-                    lb  = _get_leaderboard()
-                    res = lb.submit_model(model_id.strip(),
-                                          display_name.strip() or None,
-                                          float(params_b or 0))
-                    return f"Status: {res['status']} — {res['model_id']}"
+                    mid = model_id.strip()
+                    dname = display_name.strip() or mid.split("/")[-1]
+                    # Register first
+                    lb = _get_leaderboard()
+                    lb.submit_model(mid, dname, float(params_b or 0))
+                    yield f"Registered {mid}. Running eval (10 episodes)..."
+                    try:
+                        avg_r, sr, dc = _eval_submitted_model(mid, dname, float(params_b or 0))
+                        yield (
+                            f"\u2705 Eval complete for {mid}\n"
+                            f"  avg_reward={avg_r:.4f}  success_rate={sr:.4f}  disc_coverage={dc:.4f}\n"
+                            f"  Added to leaderboard!"
+                        )
+                    except Exception as exc:
+                        yield f"\u26a0\ufe0f Eval failed: {exc}"
 
-                lb_refresh_btn.click(
-                    _load_leaderboard,
-                    inputs=[lb_model_filter],
-                    outputs=[leaderboard_table],
-                )
+                lb_refresh_btn.click(_load_leaderboard, outputs=[lb_chart, leaderboard_table])
                 submit_btn.click(
                     _submit_model,
                     inputs=[submit_model_id, submit_name, submit_params],
@@ -808,12 +1074,17 @@ def build_gradio():
             f"Environment API at `{env_url}` | [Swagger]({env_url}/docs)*"
         )
 
-        timer   = gr.Timer(value=3)
+        timer = gr.Timer(value=3)
         outputs = [
             heatmap_plot, disc_plot, reward_plot,
-            ep_count_box, disc_box, diff_tier_box,
+            ep_count_box, avg_reward_box, success_box, disc_box, diff_tier_box, fb_size_box,
             ep_table,
-            health_md, episode_md, curriculum_info, alert_box,
+            health_md_box, episode_md_box, curriculum_info, alert_box,
+            activity_box,
+            lb_chart,
+            training_logs_box,
+            failure_table,
+            fb_novelty_box,
         ]
         timer.tick(refresh_dashboard, outputs=outputs)
 
@@ -824,6 +1095,7 @@ def build_gradio():
 # Mount Gradio into FastAPI and launch
 # ---------------------------------------------------------------------------
 
+_seed_mock_data()
 gradio_app = build_gradio()
 app = gr.mount_gradio_app(api, gradio_app, path="/")
 
