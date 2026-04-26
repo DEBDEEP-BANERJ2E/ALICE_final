@@ -45,10 +45,10 @@ def parse_args():
     p.add_argument("--lora-r",   type=int, default=16)
     p.add_argument("--4bit",     dest="load_4bit", action="store_true",
                    help="Enable 4-bit QLoRA (needed for 7B+ on a10g)")
-    p.add_argument("--flavor",   default="a10g-small",
-                   choices=["t4-small", "t4-medium", "l4x1",
+    p.add_argument("--flavor",   default="cpu-basic",
+                   choices=["cpu-basic", "t4-small", "t4-medium", "l4x1",
                              "a10g-small", "a10g-large", "l40sx1"],
-                   help="HF Jobs GPU flavor (default a10g-small = 24 GB)")
+                   help="HF Jobs flavor (default cpu-basic)")
     p.add_argument("--push-to-hub", dest="push_to_hub", action="store_true",
                    help="Push trained LoRA to HF Hub after training")
     p.add_argument("--hub-repo", default="",
@@ -76,7 +76,7 @@ def main():
     print(f"  Model:    {args.model}")
     print(f"  Episodes: {args.episodes} | Group: {args.group} | Turns: {args.turns}")
     print(f"  LR: {args.lr} | LoRA r: {args.lora_r} | 4-bit: {args.load_4bit}")
-    print(f"  Flavor:   {args.flavor}  (a10g-small = 24 GB VRAM)")
+    print(f"  Flavor:   {args.flavor}")
     print(f"  Space:    https://{HF_SPACE_ID.replace('/', '-')}.hf.space")
     print("=" * 65)
 

@@ -1185,7 +1185,7 @@ def _launch_eval_job(model_id: str, display_name: str, params_b: float, episodes
     try:
         job = run_uv_job(
             script_path,
-            flavor="a10g-small",
+            flavor="cpu-basic",
             namespace=namespace,
             env={
                 "HF_SPACE_ID": space_id,
@@ -1522,19 +1522,10 @@ def build_gradio():
             # ── Tab 2: Training Metrics ───────────────────────────────────
             with gr.TabItem("Training Metrics"):
                 active_model_md = gr.Markdown("_No training run yet — start a job to see live metrics._")
-                reward_curve_note = gr.Markdown(
-                    "> ⚠️ **Why does the reward curve look flat?** "
-                    "The baseline (TinyLlama) converged to `result = 42` — always valid Python → "
-                    "reward ≈ 0.8 every episode → no variance → GRPO advantages all zero → "
-                    "no gradient signal → model stops learning.  \n"
-                    "> **Why is GRPO loss = 0.0 in the default data?** TinyLlama ran as "
-                    "rule-based inference on the server — no local model was loaded, so "
-                    "no forward/backward pass happened and there was no gradient loss to compute.  \n"
-                    "> **Fix:** The updated `hf_job_train.py` loads the model locally with LoRA, "
-                    "uses chat-template prompts with real turn-by-turn verifier feedback, forcing "
-                    "task-specific answers → varied rewards → real GRPO loss signal. "
-                    "Start a new HF Job to see live loss curves replace the baseline data."
-                )
+                with gr.Row():
+                    start_train_btn = gr.Button("🚀 Start Training (Qwen2.5-0.5B · 50 eps · CPU)", variant="primary")
+                    train_job_link  = gr.Markdown("_Click 'Start Training' to launch a job._")
+
                 reward_plot = gr.Plot(label="4-Panel Training Metrics (Reward Curve + Cumulative + Distribution + Loss)")
                 with gr.Accordion("📚 Optional: GRPO Math & What Each Chart Means", open=False):
                     gr.Markdown(
@@ -1848,6 +1839,56 @@ def build_gradio():
             f"Environment API at [{API_URL}]({API_URL}) | "
             f"[Swagger / API Docs]({API_URL}/docs)*"
         )
+
+        def _start_training():
+            hf_token = os.getenv("HF_TOKEN", "")
+            space_id = os.getenv("HF_SPACE_ID", "rohanjain1648/alice-rl-environment")
+            if not hf_token:
+                return "❌ `HF_TOKEN` not set — add it to your Space secrets to launch a job."
+            if not space_id:
+                return "❌ `HF_SPACE_ID` not set — add it to your Space secrets."
+            try:
+                from huggingface_hub import run_uv_job
+            except ImportError:
+                return "❌ `huggingface_hub>=0.36` not installed."
+            namespace   = space_id.split("/")[0]
+            script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "training", "hf_job_train.py")
+            try:
+                job = run_uv_job(
+                    script_path,
+                    flavor="cpu-basic",
+                    namespace=namespace,
+                    env={
+                        "HF_SPACE_ID": space_id,
+                        "MODEL_ID":    "Qwen/Qwen2.5-0.5B-Instruct",
+                        "EPISODES":    "50",
+                        "GROUP_SIZE":  "4",
+                        "MAX_TURNS":   "3",
+                        "LR":          "1e-5",
+                        "LORA_R":      "16",
+                        "LOAD_IN_4BIT": "0",
+                    },
+                    secrets={"HF_TOKEN": hf_token},
+                    token=hf_token,
+                )
+                _LIVE_JOBS.insert(0, {
+                    "job_id": job.id, "model": "Qwen/Qwen2.5-0.5B-Instruct", "episodes": 50,
+                    "avg_reward": 0.0, "success_rate": 0.0, "elapsed_s": 0.0,
+                    "status": "RUNNING", "url": job.url,
+                    "timestamp": datetime.now(timezone.utc).isoformat()[:19] + "Z",
+                })
+                if len(_LIVE_JOBS) > 20:
+                    _LIVE_JOBS.pop()
+                return (
+                    f"✅ Job submitted! **[View on HF Jobs]({job.url})**\n\n"
+                    f"Job ID: `{job.id}` | Model: `Qwen/Qwen2.5-0.5B-Instruct` | Episodes: 50 | Flavor: cpu-basic\n\n"
+                    f"Metrics will appear live in the charts below as training runs. "
+                    f"Also check the [HF Jobs dashboard](https://huggingface.co/jobs)."
+                )
+            except Exception as exc:
+                return f"⚠️ Job submission failed: {exc}"
+
+        start_train_btn.click(_start_training, outputs=[train_job_link])
 
         timer = gr.Timer(value=3)
         outputs = [

@@ -171,6 +171,14 @@ def refresh():
     disc_coverage = 0.0
     heatmap_data  = None
 
+    # Pull live training metrics from server if available
+    training = _get("/training/metrics")
+    if training:
+        disc_coverage = float(training.get("disc_coverage", 0.0))
+        heatmap_data  = training.get("heatmap")
+        for r in training.get("rewards", []):
+            _reward_history.append(float(r))
+
     # Alerts
     alerts = []
     if err_rate > 0.1:
@@ -259,6 +267,9 @@ def build_dashboard():
             with gr.TabItem("Training Metrics"):
                 reward_plot = gr.Plot(label="Reward Distribution & Time Series")
                 with gr.Row():
+                    start_train_btn = gr.Button("🚀 Start Training (Qwen2.5-0.5B · 50 eps · CPU)", variant="primary")
+                    train_job_link  = gr.Markdown("_Click 'Start Training' to launch a job._")
+                with gr.Row():
                     pause_btn   = gr.Button("Pause Updates", variant="secondary")
                     status_text = gr.Textbox(label="Status", value="Running", interactive=False, scale=1)
                 _paused_state = gr.State(value=False)
@@ -272,6 +283,45 @@ def build_dashboard():
                 pause_btn.click(_toggle_pause,
                                 inputs=[_paused_state],
                                 outputs=[_paused_state, pause_btn, status_text])
+
+                def _start_training_standalone():
+                    hf_token = os.getenv("HF_TOKEN", "")
+                    space_id = os.getenv("HF_SPACE_ID", "")
+                    if not hf_token:
+                        return "❌ `HF_TOKEN` not set in environment."
+                    if not space_id:
+                        return "❌ `HF_SPACE_ID` not set in environment."
+                    try:
+                        from huggingface_hub import run_uv_job
+                        import pathlib
+                        script_path = str(pathlib.Path(__file__).parent.parent / "training" / "hf_job_train.py")
+                        namespace = space_id.split("/")[0]
+                        job = run_uv_job(
+                            script_path,
+                            flavor="cpu-basic",
+                            namespace=namespace,
+                            env={
+                                "HF_SPACE_ID": space_id,
+                                "MODEL_ID":    "Qwen/Qwen2.5-0.5B-Instruct",
+                                "EPISODES":    "50",
+                                "GROUP_SIZE":  "4",
+                                "MAX_TURNS":   "3",
+                                "LR":          "1e-5",
+                                "LORA_R":      "16",
+                                "LOAD_IN_4BIT": "0",
+                            },
+                            secrets={"HF_TOKEN": hf_token},
+                            token=hf_token,
+                        )
+                        return (
+                            f"✅ Job submitted! **[View on HF Jobs]({job.url})**\n\n"
+                            f"Job ID: `{job.id}` | Model: `Qwen/Qwen2.5-0.5B-Instruct` | Episodes: 50\n\n"
+                            f"Metrics will appear live in the charts as training runs."
+                        )
+                    except Exception as exc:
+                        return f"⚠️ Submission failed: {exc}"
+
+                start_train_btn.click(_start_training_standalone, outputs=[train_job_link])
 
             # ── Tab 4: HF Space & Jobs ────────────────────────────────────
             with gr.TabItem("HF Space & Jobs"):
