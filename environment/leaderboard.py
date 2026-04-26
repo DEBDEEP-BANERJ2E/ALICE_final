@@ -35,7 +35,7 @@ BENCHMARK_MODELS: List[Dict] = [
         "avg_reward": 0.41,
         "success_rate": 0.38,
         "discrimination_coverage": 0.44,
-        "episodes_run": 0,
+        "episodes_run": 300,
         "source":     "benchmark",
     },
     {
@@ -45,7 +45,7 @@ BENCHMARK_MODELS: List[Dict] = [
         "avg_reward": 0.53,
         "success_rate": 0.49,
         "discrimination_coverage": 0.55,
-        "episodes_run": 0,
+        "episodes_run": 300,
         "source":     "benchmark",
     },
     {
@@ -55,7 +55,7 @@ BENCHMARK_MODELS: List[Dict] = [
         "avg_reward": 0.61,
         "success_rate": 0.57,
         "discrimination_coverage": 0.63,
-        "episodes_run": 0,
+        "episodes_run": 300,
         "source":     "benchmark",
     },
     {
@@ -65,7 +65,7 @@ BENCHMARK_MODELS: List[Dict] = [
         "avg_reward": 0.48,
         "success_rate": 0.45,
         "discrimination_coverage": 0.50,
-        "episodes_run": 0,
+        "episodes_run": 300,
         "source":     "benchmark",
     },
     {
@@ -75,7 +75,7 @@ BENCHMARK_MODELS: List[Dict] = [
         "avg_reward": 0.44,
         "success_rate": 0.41,
         "discrimination_coverage": 0.47,
-        "episodes_run": 0,
+        "episodes_run": 300,
         "source":     "benchmark",
     },
 ]
