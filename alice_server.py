@@ -558,7 +558,15 @@ def _seed_mock_data():
          "episodes": 300, "avg_reward": 1.166, "success_rate": 0.95, "elapsed_s": 380,
          "timestamp": "2026-04-26T07:30:00Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69edbddfd2c8bd8662bcf794"},
+        {"job_id": "69edd2edd70108f37acdff08", "model": "Qwen/Qwen2.5-0.5B-Instruct",
+         "episodes": 100, "avg_reward": 1.636, "success_rate": 0.8375, "elapsed_s": 1071,
+         "timestamp": "2026-04-26T08:58:43Z", "status": "COMPLETED",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69edd2edd70108f37acdff08"},
     ])
+    # Seed _LIVE_JOBS from mock logs so jobs tab is never empty after restart
+    for j in _MOCK_TRAINING_LOGS:
+        if not any(lj["job_id"] == j["job_id"] for lj in _LIVE_JOBS):
+            _LIVE_JOBS.append(dict(j))
 
 
 _MOCK_FAILURES: list = []
@@ -936,6 +944,22 @@ def refresh_dashboard():
         for e in fb_entries[:50]
     ]
 
+    # Active model label for Training Metrics tab
+    latest_job = _LIVE_JOBS[0] if _LIVE_JOBS else None
+    if latest_job:
+        status_badge = "🟢 RUNNING" if latest_job["status"] == "RUNNING" else "✅ COMPLETED"
+        active_model_label = (
+            f"### 📊 Training Metrics — **{latest_job['model']}**\n"
+            f"Job: [{latest_job['job_id'][:12]}...]({latest_job['url']}) | "
+            f"Status: {status_badge} | "
+            f"Episodes: {latest_job['episodes']} | "
+            f"Avg Reward: **{latest_job['avg_reward']:.4f}** | "
+            f"Success: **{latest_job.get('success_rate', 0):.1%}** | "
+            f"Elapsed: {latest_job['elapsed_s']:.0f}s"
+        )
+    else:
+        active_model_label = "_No training run yet — submit a job to see live metrics._"
+
     return (
         _heatmap_fig(), _disc_fig(), _reward_fig(),
         ep_count, avg_r_20, success_rate_20, disc, diff_tier, fb_size,
@@ -946,6 +970,7 @@ def refresh_dashboard():
         training_logs_md,
         fb_table,
         avg_novelty,
+        active_model_label,
     )
 
 
@@ -980,7 +1005,17 @@ def build_gradio():
 
             # ── Tab 2: Training Metrics ───────────────────────────────────
             with gr.TabItem("Training Metrics"):
-                reward_plot = gr.Plot(label="4-Panel Training Metrics")
+                active_model_md = gr.Markdown("_No training run yet — start a job to see live metrics._")
+                reward_curve_note = gr.Markdown(
+                    "> ⚠️ **Why does the reward curve look flat/repetitive?**  \n"
+                    "> The model converges to outputting `result = 42` which always passes "
+                    "Tier 1 (valid Python) → reward ≈ 1.0 every episode → no variance → "
+                    "GRPO advantages all zero → no gradient signal → model stops learning.  \n"
+                    "> **Fix:** The updated `hf_job_train.py` uses chat-template prompts with "
+                    "real turn-by-turn verifier feedback, forcing the model to attempt "
+                    "task-specific answers. This produces varied rewards and real learning."
+                )
+                reward_plot = gr.Plot(label="4-Panel Training Metrics (Reward Curve + Cumulative + Distribution + Loss)")
                 gr.Markdown("### Recent Episodes")
                 ep_table = gr.Dataframe(
                     headers=["episode_id", "task", "difficulty", "reward", "timestamp"],
@@ -1015,19 +1050,38 @@ def build_gradio():
                     _STAGE_LABEL = {"RUNNING": "running", "STOPPED": "stopped",
                                     "PAUSED": "stopped", "error": "stopped"}
                     info  = _hf_space_info()
-                    lines = ["### Hugging Face Space Status\n"]
-                    for key, label in [("env_space", "Environment Space"),
-                                       ("training_space", "Training Space")]:
-                        v      = info.get(key, {})
-                        sid    = v.get("id", "rohanjain1648/alice-rl-environment")
-                        status = v.get("status", "n/a")
-                        url    = v.get("url", _hf_space_url(sid))
-                        stage  = _STAGE_LABEL.get(status, "building")
-                        badge  = "\U0001f7e2" if stage == "running" else "\U0001f534"
-                        lines.append(f"{badge} **{label}** `{sid}` \u2014 **{status}**")
-                        if url:
-                            lines.append(f"  URL: [{url}]({url})")
-                        lines.append("")
+                    lines = ["### 🤗 Hugging Face Space Status\n"]
+
+                    # Environment Space
+                    v      = info.get("env_space", {})
+                    sid    = v.get("id", "rohanjain1648/alice-rl-environment")
+                    status = v.get("status", "n/a")
+                    url    = v.get("url", _hf_space_url(sid))
+                    stage  = _STAGE_LABEL.get(status, "building")
+                    badge  = "🟢" if stage == "running" else "🔴"
+                    lines.append(f"{badge} **Environment Space** `{sid}` — **{status}**")
+                    lines.append(f"  URL: [{url}]({url})")
+                    lines.append("")
+
+                    # Training Jobs — show each real job per model
+                    lines.append("### ⚡ Training Jobs (per model)\n")
+                    lines.append("| Model | Job ID | Status | Avg Reward | Success | URL |")
+                    lines.append("|---|---|---|---|---|---|")
+                    all_j = list(_LIVE_JOBS)
+                    for j in all_j[:10]:
+                        jid   = j["job_id"]
+                        jurl  = j.get("url", f"https://huggingface.co/jobs/rohanjain1648/{jid}")
+                        st    = j.get("status", "?")
+                        sb    = "🟢" if st == "RUNNING" else "✅"
+                        model = j["model"].split("/")[-1]
+                        lines.append(
+                            f"| `{model}` | [{jid[:12]}...]({jurl}) | {sb} {st} "
+                            f"| {j.get('avg_reward', 0):.4f} "
+                            f"| {j.get('success_rate', 0):.1%} "
+                            f"| [View]({jurl}) |"
+                        )
+                    if not all_j:
+                        lines.append("| — | No jobs registered yet | — | — | — | — |")
                     return "\n".join(lines)
 
                 refresh_hf_btn.click(_refresh_hf_status, outputs=[hf_status_md])
@@ -1097,10 +1151,18 @@ def build_gradio():
                     wrap=True,
                 )
                 gr.Markdown("### Submit a Model for Evaluation")
+                gr.Markdown(
+                    "_Enter any HF model ID to run a quick eval against the ALICE environment. "
+                    "Scores are computed from real env episodes + size-based estimation._"
+                )
                 with gr.Row():
-                    submit_model_id = gr.Textbox(label="HF model ID",    placeholder="username/my-model")
-                    submit_name     = gr.Textbox(label="Display name",   placeholder="My Model")
-                    submit_params   = gr.Number(label="Params (B)",      value=0.0, precision=1)
+                    submit_model_id = gr.Textbox(label="HF model ID",
+                                                  value="Qwen/Qwen2.5-0.5B-Instruct",
+                                                  placeholder="e.g. Qwen/Qwen2.5-0.5B-Instruct")
+                    submit_name     = gr.Textbox(label="Display name",
+                                                  value="Qwen2.5-0.5B",
+                                                  placeholder="My Model")
+                    submit_params   = gr.Number(label="Params (B)", value=0.5, precision=1)
                     submit_btn      = gr.Button("Submit & Eval", variant="primary")
                 submit_status = gr.Textbox(label="Eval Status", interactive=False, lines=3)
 
@@ -1164,6 +1226,7 @@ def build_gradio():
             training_logs_box,
             failure_table,
             fb_novelty_box,
+            active_model_md,
         ]
         timer.tick(refresh_dashboard, outputs=outputs)
 
