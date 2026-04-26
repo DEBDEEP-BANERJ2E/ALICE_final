@@ -28,6 +28,8 @@ LEADERBOARD_PATH = Path(os.getenv("LEADERBOARD_PATH", "data/leaderboard.json"))
 # ---------------------------------------------------------------------------
 
 BENCHMARK_MODELS: List[Dict] = [
+    # These are pre-seeded estimates, not from actual training runs (episodes_run=0)
+    # Real runs will overwrite these values via /leaderboard/update
     {
         "model_id":   "Qwen/Qwen2.5-0.5B-Instruct",
         "display_name": "Qwen2.5-0.5B",
@@ -35,7 +37,7 @@ BENCHMARK_MODELS: List[Dict] = [
         "avg_reward": 0.41,
         "success_rate": 0.38,
         "discrimination_coverage": 0.44,
-        "episodes_run": 300,
+        "episodes_run": 0,
         "source":     "benchmark",
     },
     {
@@ -45,7 +47,7 @@ BENCHMARK_MODELS: List[Dict] = [
         "avg_reward": 0.53,
         "success_rate": 0.49,
         "discrimination_coverage": 0.55,
-        "episodes_run": 300,
+        "episodes_run": 0,
         "source":     "benchmark",
     },
     {
@@ -55,7 +57,7 @@ BENCHMARK_MODELS: List[Dict] = [
         "avg_reward": 0.61,
         "success_rate": 0.57,
         "discrimination_coverage": 0.63,
-        "episodes_run": 300,
+        "episodes_run": 0,
         "source":     "benchmark",
     },
     {
@@ -65,7 +67,7 @@ BENCHMARK_MODELS: List[Dict] = [
         "avg_reward": 0.48,
         "success_rate": 0.45,
         "discrimination_coverage": 0.50,
-        "episodes_run": 300,
+        "episodes_run": 0,
         "source":     "benchmark",
     },
     {
@@ -75,7 +77,7 @@ BENCHMARK_MODELS: List[Dict] = [
         "avg_reward": 0.44,
         "success_rate": 0.41,
         "discrimination_coverage": 0.47,
-        "episodes_run": 300,
+        "episodes_run": 0,
         "source":     "benchmark",
     },
 ]
