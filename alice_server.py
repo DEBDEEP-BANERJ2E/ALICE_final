@@ -125,11 +125,6 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 api.add_middleware(RequestLoggingMiddleware)
 
 
-@api.on_event("startup")
-async def _startup():
-    """Seed mock data immediately on startup so /jobs is never empty."""
-    _seed_mock_data()
-    logger.info("Server startup complete — mock data seeded, %d jobs registered", len(_LIVE_JOBS))
 api.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -636,15 +631,15 @@ _ARCH_HTML = """
 <div style="text-align:center;font-size:18px;font-weight:800;color:#FF9D00;margin-bottom:20px">ALICE Architecture</div>
 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px">
   <div style="background:#1e293b;border:1px solid #FF9D00;border-radius:10px;padding:14px">
-    <div style="color:#FF9D00;font-weight:700;margin-bottom:6px">\ud83d\udd2e Oracle Interface</div>
+    <div style="color:#FF9D00;font-weight:700;margin-bottom:6px">&#x1F52E; Oracle Interface</div>
     <div style="color:#94a3b8;font-size:12px">Queries a stronger reference model (GPT-4o / Qwen-72B) to find tasks your model fails but the oracle passes \u2192 <b style="color:#f1f5f9">discrimination zone</b></div>
   </div>
   <div style="background:#1e293b;border:1px solid #4a90e2;border-radius:10px;padding:14px">
-    <div style="color:#4a90e2;font-weight:700;margin-bottom:6px">\ud83c\udfaf Curriculum Manager</div>
+    <div style="color:#4a90e2;font-weight:700;margin-bottom:6px">&#x1F3AF; Curriculum Manager</div>
     <div style="color:#94a3b8;font-size:12px">Tracks per-task success rates across 5 domains \u00d7 10 tiers. Hunts in the 20-80% zone \u2014 not too easy, not too hard.</div>
   </div>
   <div style="background:#1e293b;border:1px solid #10b981;border-radius:10px;padding:14px">
-    <div style="color:#10b981;font-weight:700;margin-bottom:6px">\ud83c\udfe6 Failure Bank</div>
+    <div style="color:#10b981;font-weight:700;margin-bottom:6px">&#x1F3E6; Failure Bank</div>
     <div style="color:#94a3b8;font-size:12px">Stores confirmed failures with sentence-transformer embeddings. k-NN novelty score ensures we never waste an episode on something already known.</div>
   </div>
 </div>
@@ -658,7 +653,7 @@ _ARCH_HTML = """
     </div>
   </div>
   <div style="background:#1e293b;border:1px solid #e74c3c;border-radius:10px;padding:14px">
-    <div style="color:#e74c3c;font-weight:700;margin-bottom:6px">\ud83d\udcc8 GRPO Policy Gradient</div>
+    <div style="color:#e74c3c;font-weight:700;margin-bottom:6px">&#x1F4C8; GRPO Policy Gradient</div>
     <div style="color:#94a3b8;font-size:12px">
       Group Relative Policy Optimisation \u2014 normalises rewards within a rollout group \u2192 advantages \u2192 policy update.<br>
       <b style="color:#f1f5f9">Loss = \u2212(advantage \u00d7 log_prob) + KL_coef \u00d7 log_prob\u00b2</b>
@@ -818,7 +813,7 @@ _PRICING_HTML = """
 .highlight-box { background:linear-gradient(135deg,#FF9D0015,#FF9D0005); border:2px solid #FF9D00; border-radius:16px; padding:20px; margin:20px 0; }
 </style>
 <div class="highlight-box">
-  <div style="font-size:22px;font-weight:900;color:#FF9D00;margin-bottom:8px">\ud83d\udca1 Business Model</div>
+  <div style="font-size:22px;font-weight:900;color:#FF9D00;margin-bottom:8px">&#x1F4A1; Business Model</div>
   <div style="color:#cbd5e1;font-size:14px;line-height:1.7">
     ALICE is the <b style="color:#f1f5f9">first adversarial RL training environment</b> for LLMs that auto-generates its own benchmarks.
     Every evaluation run trains the environment to be harder \u2014 the product literally gets better every time a customer uses it.
@@ -872,7 +867,7 @@ _PRICING_HTML = """
   </div>
 </div>
 <div class="credit-box">
-  <div style="font-size:16px;font-weight:800;color:#FF9D00;margin-bottom:8px">\ud83e\ude99 ALICE Credits</div>
+  <div style="font-size:16px;font-weight:800;color:#FF9D00;margin-bottom:8px">&#x1FA99; ALICE Credits</div>
   <div style="color:#cbd5e1;font-size:13px;line-height:1.7">
     1 ALICE Credit = 1 eval episode on a10g-small (~7 sec compute).<br>
     Credits are pre-purchased, converted to HF GPU compute on-demand.<br>
@@ -1407,7 +1402,7 @@ def build_gradio():
         with gr.Tabs(elem_classes="tab-nav"):
 
             # ── Tab 0: Mission & How It Works ─────────────────────────────
-            with gr.TabItem("🎯 Mission"):
+            with gr.TabItem("&#x1F3AF; Mission"):
                 with gr.Accordion("🔴 The Problem: Why Benchmarks Are Broken", open=True):
                     gr.Markdown(_PROBLEM_MD)
                 with gr.Accordion("🏗 Our Solution: ALICE Architecture", open=True):
