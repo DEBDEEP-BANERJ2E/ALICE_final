@@ -2,23 +2,20 @@
 Launch ALICE training as a Hugging Face Job.
 
 Usage:
-    python scripts/launch_hf_job.py [--model MODEL_ID] [--episodes N] [--flavor FLAVOR]
-
-Examples:
     python scripts/launch_hf_job.py
-    python scripts/launch_hf_job.py --model Qwen/Qwen2.5-0.5B-Instruct --episodes 50 --flavor t4-small
-    python scripts/launch_hf_job.py --model Qwen/Qwen2.5-1.5B-Instruct --episodes 200 --flavor a10g-small
+    python scripts/launch_hf_job.py --episodes 50
+    python scripts/launch_hf_job.py --model Qwen/Qwen2.5-Coder-3B-Instruct --episodes 100
+
+Model/provider defaults:
+    model    = Qwen/Qwen2.5-Coder-3B-Instruct  (cheapest: $0.01/M via nscale)
+    provider = nscale
+    flavor   = cpu-basic  (no GPU needed — inference is remote)
 """
-
 from __future__ import annotations
-
-import argparse
-import os
-import sys
-import time
+import argparse, os, sys, time
 from pathlib import Path
 
-# ── Load .env ─────────────────────────────────────────────────────────────────
+# Load .env
 _env_file = Path(__file__).parent.parent.parent / ".env"
 if _env_file.exists():
     for line in _env_file.read_text().splitlines():
@@ -36,26 +33,17 @@ if not HF_TOKEN:
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Launch ALICE training on HF Jobs")
-    p.add_argument("--model",    default="Qwen/Qwen2.5-0.5B-Instruct",
-                   help="HF model ID to train")
-    p.add_argument("--episodes", type=int, default=100,
-                   help="Number of training episodes")
-    p.add_argument("--group",    type=int, default=4,
-                   help="GRPO group size")
-    p.add_argument("--turns",    type=int, default=3,
-                   help="Max turns per episode")
+    p = argparse.ArgumentParser()
+    p.add_argument("--model",    default="HuggingFaceTB/SmolLM2-135M-Instruct")
+    p.add_argument("--episodes", type=int, default=300)
+    p.add_argument("--group",    type=int, default=4)
+    p.add_argument("--turns",    type=int, default=2)
+    p.add_argument("--4bit",     dest="load_4bit", action="store_true",
+                   help="Enable 4-bit quantisation (GPU only)")
     p.add_argument("--flavor",   default="t4-small",
-                   choices=["cpu-basic", "cpu-upgrade",
-                             "t4-small", "t4-medium",
-                             "l4x1", "a10g-small", "a10g-large", "a100-large"],
-                   help="HF Jobs hardware flavor")
-    p.add_argument("--hub-repo", default="",
-                   help="HF Hub repo to push trained model (e.g. username/alice-trained)")
-    p.add_argument("--timeout",  default="3h",
-                   help="Job timeout (e.g. 2h, 90m, 7200)")
-    p.add_argument("--no-wait",  action="store_true",
-                   help="Submit job and exit without streaming logs")
+                   choices=["cpu-basic", "cpu-upgrade", "t4-small", "t4-medium",
+                             "l4x1", "a10g-small", "a10g-large"])
+    p.add_argument("--no-wait",  action="store_true")
     return p.parse_args()
 
 
@@ -63,46 +51,37 @@ def main():
     args = parse_args()
 
     try:
-        from huggingface_hub import run_uv_job, inspect_job, fetch_job_logs, fetch_job_metrics
+        from huggingface_hub import run_uv_job, inspect_job, fetch_job_logs
     except ImportError:
-        print("huggingface_hub not installed. Run: pip install huggingface_hub")
+        print("pip install huggingface_hub")
         sys.exit(1)
+
+    # Pre-set namespace to avoid whoami rate-limit call inside run_uv_job
+    os.environ["HF_HUB_DISABLE_EXPERIMENTAL_WARNING"] = "1"
+    namespace = HF_SPACE_ID.split("/")[0]  # "rohanjain1648"
 
     script_path = str(Path(__file__).parent.parent / "training" / "hf_job_train.py")
-    if not Path(script_path).exists():
-        print(f"ERROR: Training script not found at {script_path}")
-        sys.exit(1)
-
-    secrets = {"HF_TOKEN": HF_TOKEN}
-    env = {
-        "HF_SPACE_ID":    HF_SPACE_ID,
-        "MODEL_ID":       args.model,
-        "EPISODES":       str(args.episodes),
-        "GROUP_SIZE":     str(args.group),
-        "MAX_TURNS":      str(args.turns),
-        "LR":             "1e-5",
-        "KL_COEF":        "0.04",
-        "MAX_NEW_TOKENS": "128",
-    }
-    if args.hub_repo:
-        env["HUB_REPO_ID"] = args.hub_repo
 
     print("=" * 60)
-    print("Submitting ALICE training job to HF Jobs")
-    print(f"  Model:   {args.model}")
-    print(f"  Episodes:{args.episodes} | Group:{args.group} | Turns:{args.turns}")
-    print(f"  Flavor:  {args.flavor}")
-    print(f"  Timeout: {args.timeout}")
-    if args.hub_repo:
-        print(f"  Push to: {args.hub_repo}")
+    print("Submitting ALICE training job")
+    print(f"  Model:    {args.model}")
+    print(f"  Episodes: {args.episodes} | Group: {args.group} | Turns: {args.turns}")
+    print(f"  Flavor:   {args.flavor} | 4bit: {args.load_4bit}")
     print("=" * 60)
 
     job = run_uv_job(
         script_path,
         flavor=args.flavor,
-        env=env,
-        secrets=secrets,
-        timeout=args.timeout,
+        namespace=namespace,
+        env={
+            "HF_SPACE_ID":    HF_SPACE_ID,
+            "MODEL_ID":       args.model,
+            "EPISODES":       str(args.episodes),
+            "GROUP_SIZE":     str(args.group),
+            "MAX_TURNS":      str(args.turns),
+            "LOAD_IN_4BIT":   "1" if args.load_4bit else "0",
+        },
+        secrets={"HF_TOKEN": HF_TOKEN},
         token=HF_TOKEN,
     )
 
@@ -112,42 +91,27 @@ def main():
     print(f"   Status:  {job.status.stage}")
 
     if args.no_wait:
-        print("\nRun this to stream logs:")
-        print(f"  python -c \"from huggingface_hub import fetch_job_logs; "
-              f"[print(l) for l in fetch_job_logs('{job.id}')]\"")
+        print(f"\nStream logs: python -c \"from huggingface_hub import fetch_job_logs; "
+              f"[print(l,end='') for l in fetch_job_logs(job_id='{job.id}', token='{HF_TOKEN}')]\"")
         return
 
-    # ── Stream logs ───────────────────────────────────────────────────────────
-    print("\nStreaming logs (Ctrl+C to stop watching, job continues)...\n")
-    print("-" * 60)
-
+    print("\nStreaming logs...\n" + "-" * 60)
     try:
-        last_stage = job.status.stage
-        for log_line in fetch_job_logs(job_id=job.id, token=HF_TOKEN):
-            print(log_line, end="", flush=True)
+        for line in fetch_job_logs(job_id=job.id, token=HF_TOKEN):
+            print(line, end="", flush=True)
 
-        # Final status
         final = inspect_job(job_id=job.id, token=HF_TOKEN)
         print(f"\n{'=' * 60}")
         print(f"Job finished: {final.status.stage}")
-        print(f"Job URL: {final.url}")
-
+        space_url = f"https://{HF_SPACE_ID.replace('/', '-')}.hf.space"
         if final.status.stage == "COMPLETED":
-            print("\n✅ Training complete!")
-            if args.hub_repo:
-                print(f"   Model at: https://huggingface.co/{args.hub_repo}")
-            space_url = f"https://{HF_SPACE_ID.replace('/', '-')}.hf.space"
-            print(f"   Leaderboard: {space_url}/leaderboard")
-        elif final.status.stage == "ERROR":
-            print(f"\n❌ Job failed: {final.status.message}")
-            print("   Check full logs at:", final.url)
+            print(f"✅ Done! Leaderboard: {space_url}/leaderboard")
+        else:
+            print(f"❌ Failed: {getattr(final.status, 'message', '')}")
+            print(f"   Logs: {final.url}")
             sys.exit(1)
-
     except KeyboardInterrupt:
-        print(f"\n\nStopped watching. Job is still running.")
-        print(f"Job URL: {job.url}")
-        print(f"To check status: python -c \"from huggingface_hub import inspect_job; "
-              f"print(inspect_job('{job.id}').status)\"")
+        print(f"\nStopped watching. Job still running: {job.url}")
 
 
 if __name__ == "__main__":
