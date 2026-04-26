@@ -28,6 +28,8 @@ LEADERBOARD_PATH = Path(os.getenv("LEADERBOARD_PATH", "data/leaderboard.json"))
 # ---------------------------------------------------------------------------
 
 BENCHMARK_MODELS: List[Dict] = [
+    # These are pre-seeded estimates, not from actual training runs (episodes_run=0)
+    # Real runs will overwrite these values via /leaderboard/update
     {
         "model_id":   "Qwen/Qwen2.5-0.5B-Instruct",
         "display_name": "Qwen2.5-0.5B",

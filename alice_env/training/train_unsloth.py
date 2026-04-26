@@ -155,28 +155,45 @@ def load_model_and_tokenizer(model_id: str, max_seq_length: int, lora_rank: int)
 # GRPO rollout + update (mirrors train_trl.py but uses Unsloth-trained model)
 # ---------------------------------------------------------------------------
 
-def _sample_response(model, tokenizer, prompt: str, max_new_tokens: int,
-                      unsloth_active: bool) -> str:
+def _sample_response(model, tokenizer, task: str, feedback: str,
+                      max_new_tokens: int, unsloth_active: bool) -> str:
+    """Generate result = ... Python answer using chat template."""
+    _SYSTEM = "You are a precise Python solver. Output ONLY: result = <value>. No explanations."
+    messages = [{"role": "system", "content": _SYSTEM}]
+    if feedback:
+        messages += [
+            {"role": "user",      "content": f"Task: {task}"},
+            {"role": "assistant", "content": "result = ..."},
+            {"role": "user",      "content": f"Feedback: {feedback}\nTask: {task}"},
+        ]
+    else:
+        messages.append({"role": "user", "content": f"Task: {task}"})
+    try:
+        prompt = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True)
+        prompt += "result ="
+    except Exception:
+        prompt = f"{_SYSTEM}\n\nTask: {task}\nresult ="
+
     device  = next(model.parameters()).device
     inputs  = tokenizer(prompt, return_tensors="pt",
                         truncation=True, max_length=512).to(device)
 
     if unsloth_active:
-        # Unsloth inference mode — 2× faster generation
         from unsloth import FastLanguageModel
         FastLanguageModel.for_inference(model)
 
     with torch.no_grad():
         out = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            temperature=0.8,
-            top_p=0.9,
+            **inputs, max_new_tokens=max_new_tokens,
+            do_sample=True, temperature=0.7, top_p=0.92,
+            repetition_penalty=1.1,
             pad_token_id=tokenizer.pad_token_id,
         )
-    gen_ids = out[0][inputs["input_ids"].shape[1]:]
-    return tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+    raw = tokenizer.decode(out[0][inputs["input_ids"].shape[1]:],
+                           skip_special_tokens=True).strip()
+    first = raw.split("\n")[0].strip()
+    return first if first.startswith("result") else f"result = {first[:200]}"
 
 
 def collect_rollouts(model, tokenizer, group_size: int, max_turns: int,
@@ -189,19 +206,23 @@ def collect_rollouts(model, tokenizer, group_size: int, max_turns: int,
             task  = ep["task"]
             total_reward = 0.0
             last_action  = ""
+            feedback     = ""
 
-            for _ in range(max_turns):
-                # Chain-of-thought: model reasons before answering (CoT feature)
-                cot_prompt = (
-                    f"<task>{task}</task>\n"
-                    "Reason step by step, then state your final answer.\n"
-                    "<reasoning>"
-                )
-                action = _sample_response(model, tokenizer, cot_prompt,
+            for turn in range(max_turns):
+                action = _sample_response(model, tokenizer, task, feedback,
                                            max_new_tokens, unsloth_active)
                 result = env_step(ep_id, action)
                 total_reward += result["reward"]
                 last_action   = action
+                verif = result.get("info", {}).get("verification", {})
+                composite = verif.get("composite_score", 0.0)
+                if composite >= 0.5:
+                    feedback = f"Turn {turn+1} passed (score={composite:.2f})."
+                else:
+                    t1 = verif.get("tier1_details", {}) or {}
+                    feedback = (f"Error: {t1.get('error_message','unknown')}. Fix the code."
+                                if not t1.get("success", True)
+                                else f"Score {composite:.2f}. Improve correctness.")
                 if result.get("done"):
                     break
 
