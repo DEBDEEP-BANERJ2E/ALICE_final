@@ -403,6 +403,57 @@ async def training_push(req: TrainingPushRequest):
 
 
 # ---------------------------------------------------------------------------
+# Job registration endpoint — training scripts call this to show live status
+# ---------------------------------------------------------------------------
+
+_LIVE_JOBS: list = []   # list of job dicts, newest first
+
+class JobRegisterRequest(BaseModel):
+    job_id:       str
+    model:        str
+    episodes:     int
+    avg_reward:   float = 0.0
+    success_rate: float = 0.0
+    elapsed_s:    float = 0.0
+    status:       str   = "RUNNING"
+    url:          str   = ""
+    timestamp:    str   = ""
+
+
+@api.post("/jobs/register")
+async def register_job(req: JobRegisterRequest):
+    """Called by training scripts to register/update a live job in the dashboard."""
+    ts = req.timestamp or datetime.now(timezone.utc).isoformat()[:19] + "Z"
+    # Update existing entry if same job_id, else prepend
+    for j in _LIVE_JOBS:
+        if j["job_id"] == req.job_id:
+            j.update({
+                "model": req.model, "episodes": req.episodes,
+                "avg_reward": round(req.avg_reward, 4),
+                "success_rate": round(req.success_rate, 4),
+                "elapsed_s": round(req.elapsed_s, 1),
+                "status": req.status, "url": req.url, "timestamp": ts,
+            })
+            return {"status": "updated", "job_id": req.job_id}
+    _LIVE_JOBS.insert(0, {
+        "job_id": req.job_id, "model": req.model, "episodes": req.episodes,
+        "avg_reward": round(req.avg_reward, 4),
+        "success_rate": round(req.success_rate, 4),
+        "elapsed_s": round(req.elapsed_s, 1),
+        "status": req.status, "url": req.url, "timestamp": ts,
+    })
+    if len(_LIVE_JOBS) > 20:
+        _LIVE_JOBS.pop()
+    return {"status": "registered", "job_id": req.job_id}
+
+
+@api.get("/jobs")
+async def list_jobs():
+    """Return all registered jobs (live + completed)."""
+    return _LIVE_JOBS
+
+
+# ---------------------------------------------------------------------------
 # Gradio dashboard — tabbed analytics
 # ---------------------------------------------------------------------------
 
@@ -845,16 +896,22 @@ def refresh_dashboard():
         activity_lines.append(f"| {i} | {e['task'][:45]} | {r_str} | {e['timestamp'][11:19]} |")
     activity_md = "\n".join(activity_lines)
 
-    # Training logs markdown
-    logs_lines = ["| Job ID | Model | Episodes | Avg Reward | Status | Time |",
-                  "|---|---|---|---|---|---|"]
-    for j in _MOCK_TRAINING_LOGS:
-        jid = j["job_id"]
-        url = j.get("url", "")
+    # Training logs markdown — merge live jobs + mock history
+    all_jobs = list(_LIVE_JOBS) + [
+        j for j in _MOCK_TRAINING_LOGS
+        if not any(lj["job_id"] == j["job_id"] for lj in _LIVE_JOBS)
+    ]
+    logs_lines = ["| Job ID | Model | Episodes | Avg Reward | Success | Status | Time |",
+                  "|---|---|---|---|---|---|---|"]
+    for j in all_jobs[:15]:
+        jid  = j["job_id"]
+        url  = j.get("url", "")
         jid_link = f"[{jid[:12]}...]({url})" if url else jid[:12]
+        status_icon = "🟢" if j["status"] == "RUNNING" else ("✅" if j["status"] == "COMPLETED" else "❌")
         logs_lines.append(
             f"| {jid_link} | {j['model'].split('/')[-1]} | {j['episodes']} "
-            f"| {j['avg_reward']:.3f} | {j['status']} | {j['timestamp'][:16]} |"
+            f"| {j['avg_reward']:.3f} | {j.get('success_rate', 0):.2%} "
+            f"| {status_icon} {j['status']} | {j['timestamp'][:16]} |"
         )
     training_logs_md = "\n".join(logs_lines)
 
