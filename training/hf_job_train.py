@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "httpx", "numpy",
+#   "httpx", "numpy", "matplotlib>=3.8.0",
 #   "torch>=2.2.0", "transformers>=4.40.0", "peft>=0.10.0",
 #   "accelerate>=0.27.0", "trl>=0.8.6", "datasets>=2.18.0",
 #   "bitsandbytes>=0.43.0",
@@ -340,6 +340,66 @@ def register_job(status="RUNNING", avg_r=0.0, avg_succ=0.0, elapsed_s=0.0):
     except Exception as e:
         log.warning("  register_job failed: %s", e)
 
+# ── Training analysis plot ─────────────────────────────────────────────────────
+def plot_training(cumul, all_rewards, all_successes, all_losses,
+                  final_r, final_succ, out_dir):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.gridspec as gridspec
+
+        W   = 5
+        fig = plt.figure(figsize=(16, 10))
+        gs  = gridspec.GridSpec(2, 2, figure=fig, hspace=0.4, wspace=0.3)
+
+        ax1 = fig.add_subplot(gs[0, 0])
+        ax1.plot(cumul, alpha=0.4, color="#4a90e2", linewidth=0.8, label="per-episode")
+        if len(cumul) >= W:
+            ma = np.convolve(cumul, np.ones(W) / W, mode="valid")
+            ax1.plot(range(W - 1, len(cumul)), ma, color="#4a90e2",
+                     linewidth=2.5, label=f"{W}-ep MA")
+        ax1.axhline(0, color="gray", linestyle="--", alpha=0.5)
+        ax1.set_title("Reward Curve", fontweight="bold")
+        ax1.set_xlabel("Episode")
+        ax1.legend(fontsize=8)
+
+        ax2 = fig.add_subplot(gs[0, 1])
+        ax2.hist(all_rewards, bins=25, color="#4a90e2", edgecolor="white", alpha=0.85)
+        ax2.axvline(np.mean(all_rewards), color="red", linestyle="--",
+                    label=f"mean={np.mean(all_rewards):.3f}")
+        ax2.set_title("Reward Distribution", fontweight="bold")
+        ax2.legend(fontsize=8)
+
+        ax3 = fig.add_subplot(gs[1, 0])
+        succ_ep = [float(np.mean(all_successes[max(0, i - GROUP_SIZE):i + GROUP_SIZE]))
+                   for i in range(0, len(all_successes), GROUP_SIZE)]
+        ax3.plot(succ_ep, color="#27ae60", linewidth=2)
+        ax3.fill_between(range(len(succ_ep)), succ_ep, alpha=0.15, color="#27ae60")
+        ax3.axhline(0.5, color="red", linestyle="--", alpha=0.6, label="50% target")
+        ax3.set_ylim(0, 1)
+        ax3.set_title("Success Rate", fontweight="bold")
+        ax3.legend(fontsize=8)
+
+        ax4 = fig.add_subplot(gs[1, 1])
+        ax4.plot(all_losses, color="#e74c3c", linewidth=1.5, alpha=0.7)
+        if len(all_losses) >= W:
+            ma_l = np.convolve(all_losses, np.ones(W) / W, mode="valid")
+            ax4.plot(range(W - 1, len(all_losses)), ma_l, color="#c0392b", linewidth=2.5)
+        ax4.set_title("Training Loss (GRPO)", fontweight="bold")
+
+        fig.suptitle(
+            f"ALICE RL — {MODEL_ID.split('/')[-1]} | {EPISODES} episodes | "
+            f"avg_reward={final_r:.4f} | success={final_succ:.0%}",
+            fontsize=13, fontweight="bold",
+        )
+        out_path = f"{out_dir}/alice_training.png"
+        plt.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        log.info("Training plot saved to %s", out_path)
+    except Exception as e:
+        log.warning("plot_training failed: %s", e)
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     import torch
@@ -450,6 +510,9 @@ def main():
                    "job_id": JOB_ID, "job_url": JOB_URL}, f, indent=2)
     log.info("Checkpoint: %s", ckpt)
 
+    plot_training(cumul, all_rewards, all_successes, all_losses,
+                  final_r, final_succ, ckpt)
+
     if PUSH_TO_HUB and HUB_REPO_ID and HF_TOKEN:
         from huggingface_hub import HfApi
         HfApi(token=HF_TOKEN).upload_folder(
@@ -467,6 +530,18 @@ def main():
         "elapsed_s": round(elapsed, 1),
         "leaderboard": f"{SPACE_URL}/leaderboard",
     }, indent=2))
+
+    try:
+        lb = _env.get("/leaderboard").json()
+        log.info("Leaderboard:")
+        for entry in lb:
+            log.info("  #%-3s %-30s rl=%.4f reward=%.4f ep=%s",
+                     entry.get("rank", "?"),
+                     entry.get("display_name", entry["model_id"].split("/")[-1])[:30],
+                     entry.get("rl_score", 0.0), entry.get("avg_reward", 0.0),
+                     entry.get("episodes_run", "?"))
+    except Exception as e:
+        log.warning("Leaderboard fetch failed: %s", e)
 
 
 if __name__ == "__main__":
