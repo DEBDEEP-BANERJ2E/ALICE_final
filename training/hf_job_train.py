@@ -9,14 +9,6 @@
 #   "bitsandbytes",
 #   "huggingface_hub",
 #   "numpy",
-#   "sentence-transformers",
-#   "RestrictedPython",
-#   "python-dateutil",
-#   "fastapi",
-#   "uvicorn",
-#   "psutil",
-#   "python-dotenv",
-#   "openai",
 # ]
 # ///
 """
@@ -65,17 +57,17 @@ log = logging.getLogger("alice.hf_job")
 HF_TOKEN       = os.environ.get("HF_TOKEN", "")
 HF_SPACE_ID    = os.environ.get("HF_SPACE_ID", "rohanjain1648/alice-rl-environment")
 MODEL_ID       = os.environ.get("MODEL_ID", "Qwen/Qwen2.5-0.5B-Instruct")
-EPISODES       = int(os.environ.get("EPISODES", "30"))    # 30 fast episodes
+EPISODES       = int(os.environ.get("EPISODES", "30"))
 GROUP_SIZE     = int(os.environ.get("GROUP_SIZE", "4"))
-MAX_TURNS      = int(os.environ.get("MAX_TURNS", "1"))    # 1 turn = 3× faster
+MAX_TURNS      = int(os.environ.get("MAX_TURNS", "1"))
 LR             = float(os.environ.get("LR", "1e-5"))
 KL_COEF        = float(os.environ.get("KL_COEF", "0.04"))
-MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", "32"))  # 32 tokens, not 128
+MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", "32"))
 HUB_REPO_ID    = os.environ.get("HUB_REPO_ID", "")
 CKPT_DIR       = "/tmp/alice_checkpoint"
 REPO_DIR       = "/tmp/alice_repo"
-ENV_URL        = "http://localhost:7860"
-# Reuse a single httpx client — avoids TCP handshake overhead per call
+# Always use the live HF Space — no local server needed in a Job container
+ENV_URL        = f"https://{HF_SPACE_ID.replace('/', '-')}.hf.space"
 _client        = httpx.Client(timeout=30.0)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -356,14 +348,27 @@ def save_and_push(model, tokenizer, avg_r: float, avg_succ: float):
 
 if __name__ == "__main__":
     log.info("=" * 60)
-    log.info("ALICE HF Job Training")
+    log.info("ALICE HF Job Training (direct to HF Space)")
     log.info("  Model:    %s", MODEL_ID)
-    log.info("  Episodes: %d | Group: %d | Turns: %d", EPISODES, GROUP_SIZE, MAX_TURNS)
-    log.info("  Space:    %s", HF_SPACE_ID)
+    log.info("  Episodes: %d | Group: %d | Turns: %d | Tokens: %d",
+             EPISODES, GROUP_SIZE, MAX_TURNS, MAX_NEW_TOKENS)
+    log.info("  Env URL:  %s", ENV_URL)
     log.info("=" * 60)
 
-    clone_repo()
-    start_server()
+    # Verify the Space is reachable before loading the model
+    log.info("Checking HF Space health...")
+    for attempt in range(10):
+        try:
+            r = _client.get(f"{ENV_URL}/health")
+            if r.status_code == 200:
+                log.info("Space healthy: %s", r.json())
+                break
+        except Exception as exc:
+            log.warning("Health check attempt %d/10 failed: %s", attempt + 1, exc)
+            time.sleep(5)
+    else:
+        raise RuntimeError(f"HF Space {ENV_URL} not reachable after 10 attempts")
+
     model, tokenizer = load_model()
     avg_r, avg_succ  = train(model, tokenizer)
     save_and_push(model, tokenizer, avg_r, avg_succ)
