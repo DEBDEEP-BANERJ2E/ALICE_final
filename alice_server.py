@@ -127,9 +127,9 @@ api.add_middleware(RequestLoggingMiddleware)
 
 @api.on_event("startup")
 async def _startup():
-    """Pre-warm is disabled on Space — 2GB RAM is too tight for sentence-transformer at startup.
-    The model loads lazily on first /step call instead."""
-    logger.info("Server startup complete (lazy component init enabled)")
+    """Seed mock data immediately on startup so /jobs is never empty."""
+    _seed_mock_data()
+    logger.info("Server startup complete — mock data seeded, %d jobs registered", len(_LIVE_JOBS))
 api.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
