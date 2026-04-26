@@ -37,7 +37,7 @@ log = logging.getLogger("alice.job")
 HF_TOKEN     = os.environ.get("HF_TOKEN", "")
 HF_SPACE_ID  = os.environ.get("HF_SPACE_ID", "rohanjain1648/alice-rl-environment")
 MODEL_ID     = os.environ.get("MODEL_ID",   "HuggingFaceTB/SmolLM2-135M-Instruct")
-EPISODES     = int(os.environ.get("EPISODES",    "20"))
+EPISODES     = int(os.environ.get("EPISODES",    "300"))
 GROUP_SIZE   = int(os.environ.get("GROUP_SIZE",   "4"))
 MAX_TURNS    = int(os.environ.get("MAX_TURNS",    "2"))
 LOAD_IN_4BIT = os.environ.get("LOAD_IN_4BIT", "0") == "1"
