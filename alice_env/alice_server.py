@@ -587,36 +587,36 @@ def _seed_mock_data():
          "disc_coverage": 0.7362, "total_rollouts": 800, "elapsed_s": 1163,
          "timestamp": "2026-04-26T08:55:09Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69edd2edd70108f37acdff08"},
-        # ── NEW JOBS (50 eps each, a10g-small, chat-template, 3-turn) ──────────
+        # ── NEW JOBS (50 eps each, a10g-small, chat-template, 3-turn) — real results ──
         {"job_id": "69ede9b6d70108f37ace00c4",
          "model": "Qwen/Qwen2.5-0.5B-Instruct",
-         "episodes": 50, "avg_reward": 0.0, "success_rate": 0.0,
-         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 0,
-         "timestamp": "2026-04-26T10:20:00Z", "status": "RUNNING",
+         "episodes": 50, "avg_reward": 0.8181, "success_rate": 0.2375,
+         "disc_coverage": 0.2375, "total_rollouts": 400, "elapsed_s": 642,
+         "timestamp": "2026-04-26T10:43:50Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69ede9b6d70108f37ace00c4"},
         {"job_id": "69ede9b9d70108f37ace00c6",
          "model": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
-         "episodes": 50, "avg_reward": 0.0, "success_rate": 0.0,
-         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 0,
-         "timestamp": "2026-04-26T10:20:00Z", "status": "RUNNING",
+         "episodes": 50, "avg_reward": 0.5279, "success_rate": 0.0825,
+         "disc_coverage": 0.0625, "total_rollouts": 400, "elapsed_s": 790,
+         "timestamp": "2026-04-26T10:46:24Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69ede9b9d70108f37ace00c6"},
         {"job_id": "69ede9bcd70108f37ace00c8",
          "model": "Qwen/Qwen2.5-1.5B-Instruct",
-         "episodes": 50, "avg_reward": 0.0, "success_rate": 0.0,
-         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 0,
-         "timestamp": "2026-04-26T10:20:00Z", "status": "RUNNING",
+         "episodes": 50, "avg_reward": 0.8515, "success_rate": 0.1775,
+         "disc_coverage": 0.145, "total_rollouts": 400, "elapsed_s": 1007,
+         "timestamp": "2026-04-26T10:53:30Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69ede9bcd70108f37ace00c8"},
         {"job_id": "69ede9c1d70108f37ace00cb",
          "model": "google/gemma-3-1b-it",
          "episodes": 50, "avg_reward": 0.0, "success_rate": 0.0,
-         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 0,
-         "timestamp": "2026-04-26T10:20:00Z", "status": "RUNNING",
+         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 31,
+         "timestamp": "2026-04-26T10:47:04Z", "status": "ERROR",
          "url": "https://huggingface.co/jobs/rohanjain1648/69ede9c1d70108f37ace00cb"},
         {"job_id": "69ede9c4d2c8bd8662bcfca9",
          "model": "Qwen/Qwen2.5-3B-Instruct",
-         "episodes": 50, "avg_reward": 0.0, "success_rate": 0.0,
-         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 0,
-         "timestamp": "2026-04-26T10:20:00Z", "status": "RUNNING",
+         "episodes": 50, "avg_reward": 1.4278, "success_rate": 0.58,
+         "disc_coverage": 0.255, "total_rollouts": 400, "elapsed_s": 1390,
+         "timestamp": "2026-04-26T11:11:08Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69ede9c4d2c8bd8662bcfca9"},
     ])
     # Seed _LIVE_JOBS from real job history so jobs tab is never empty after restart
@@ -660,7 +660,7 @@ header_md = f"""
 <div style="display:flex;align-items:center;gap:16px;padding:16px 0 8px 0;border-bottom:2px solid #FF9D00;margin-bottom:16px">
   <div style="font-size:28px;font-weight:800;color:#FF9D00;letter-spacing:-1px">\U0001f916 ALICE</div>
   <div>
-    <div style="font-size:16px;font-weight:700;color:#1a1a2e">Adversarial Loop for Inter-model Co-evolutionary Environment</div>
+    <div style="font-size:16px;font-weight:700;color:#f1f5f9">Adversarial Loop for Inter-model Co-evolutionary Environment</div>
     <div style="font-size:12px;color:#6b7280">v0.1.0 \u00b7 OpenEnv-compliant RL training environment \u00b7
       <a href="{SPACE_URL_FULL}" target="_blank" style="color:#FF9D00">\U0001f917 Space</a> \u00b7
       <a href="{API_URL}/docs" target="_blank" style="color:#FF9D00">\U0001f4d6 API Docs</a> \u00b7
@@ -843,51 +843,54 @@ def _lb_fig():
     return fig
 
 
-def _eval_submitted_model(model_id: str, display_name: str, params_b: float):
+def _launch_eval_job(model_id: str, display_name: str, params_b: float, episodes: int) -> tuple:
+    """Submit a real HF Job to evaluate the model. Returns (job_id, job_url).
+    The job runs hf_job_train.py which pushes metrics to /training/push and
+    /leaderboard/update when done — leaderboard updates automatically.
     """
-    Eval submitted model by running 20 real env episodes using result=42 as the action.
-    This is the same baseline used in all our actual job runs — it gives a fair,
-    reproducible score. Higher param count does NOT guarantee better score.
-    Returns (avg_reward, success_rate, disc_coverage).
-    """
-    env_client = httpx.Client(
-        base_url=f"http://localhost:{os.getenv('PORT', '7860')}", timeout=15.0
+    hf_token = os.getenv("HF_TOKEN", "")
+    space_id  = os.getenv("HF_SPACE_ID", "rohanjain1648/alice-rl-environment")
+    if not hf_token:
+        raise RuntimeError("HF_TOKEN not configured in Space secrets")
+    try:
+        from huggingface_hub import run_uv_job
+    except ImportError:
+        raise RuntimeError("huggingface_hub>=0.36 required")
+
+    namespace   = space_id.split("/")[0]
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "training", "hf_job_train.py")
+
+    job = run_uv_job(
+        script_path,
+        flavor="a10g-small",
+        namespace=namespace,
+        env={
+            "HF_SPACE_ID": space_id,
+            "MODEL_ID":    model_id,
+            "EPISODES":    str(episodes),
+            "GROUP_SIZE":  "4",
+            "MAX_TURNS":   "3",
+            "LR":          "1e-5",
+            "LORA_R":      "16",
+            "LOAD_IN_4BIT": "0",
+        },
+        secrets={"HF_TOKEN": hf_token},
+        token=hf_token,
     )
-    rewards, successes, composites = [], [], []
-    N_EVAL = 20  # same as TinyLlama baseline run
-
-    for _ in range(N_EVAL):
-        try:
-            ep     = env_client.post("/reset").json()
-            ep_id  = ep["episode_id"]
-            # Run 2 turns per episode (same as most job configs)
-            total_r   = 0.0
-            composite = 0.0
-            for turn in range(2):
-                result = env_client.post("/step", json={
-                    "episode_id": ep_id,
-                    "action": "result = 42",  # baseline action — same as all job runs
-                }).json()
-                total_r   += float(result.get("reward", 0.0))
-                composite  = result.get("info", {}).get("verification", {}).get("composite_score", 0.0)
-                if result.get("done"):
-                    break
-            rewards.append(total_r)
-            successes.append(1.0 if composite >= 0.5 else 0.0)
-            composites.append(composite)
-        except Exception as exc:
-            logger.warning("Eval rollout failed: %s", exc)
-            rewards.append(0.0); successes.append(0.0); composites.append(0.0)
-
-    avg_reward   = round(float(np.mean(rewards)),    4) if rewards   else 0.0
-    success_rate = round(float(np.mean(successes)),  4) if successes else 0.0
-    disc_cov     = round(float(np.mean([
-        1.0 if 0.2 < c < 0.8 else 0.0 for c in composites
-    ])), 4) if composites else 0.0
 
     lb = _get_leaderboard()
-    lb.update_model_score(model_id, avg_reward, success_rate, disc_cov, N_EVAL)
-    return avg_reward, success_rate, disc_cov
+    lb.submit_model(model_id, display_name, params_b)
+
+    _LIVE_JOBS.insert(0, {
+        "job_id": job.id, "model": model_id, "episodes": episodes,
+        "avg_reward": 0.0, "success_rate": 0.0, "elapsed_s": 0.0,
+        "status": "RUNNING", "url": job.url,
+        "timestamp": datetime.now(timezone.utc).isoformat()[:19] + "Z",
+    })
+    if len(_LIVE_JOBS) > 20:
+        _LIVE_JOBS.pop()
+
+    return job.id, job.url
 
 
 def refresh_dashboard():
@@ -1105,13 +1108,17 @@ def build_gradio():
             with gr.TabItem("Training Metrics"):
                 active_model_md = gr.Markdown("_No training run yet — start a job to see live metrics._")
                 reward_curve_note = gr.Markdown(
-                    "> ⚠️ **Why does the reward curve look flat/repetitive?**  \n"
-                    "> The model converges to outputting `result = 42` which always passes "
-                    "Tier 1 (valid Python) → reward ≈ 1.0 every episode → no variance → "
-                    "GRPO advantages all zero → no gradient signal → model stops learning.  \n"
-                    "> **Fix:** The updated `hf_job_train.py` uses chat-template prompts with "
-                    "real turn-by-turn verifier feedback, forcing the model to attempt "
-                    "task-specific answers. This produces varied rewards and real learning."
+                    "> ⚠️ **Why does the reward curve look flat?** "
+                    "The baseline (TinyLlama) converged to `result = 42` — always valid Python → "
+                    "reward ≈ 0.8 every episode → no variance → GRPO advantages all zero → "
+                    "no gradient signal → model stops learning.  \n"
+                    "> **Why is GRPO loss = 0.0 in the default data?** TinyLlama ran as "
+                    "rule-based inference on the server — no local model was loaded, so "
+                    "no forward/backward pass happened and there was no gradient loss to compute.  \n"
+                    "> **Fix:** The updated `hf_job_train.py` loads the model locally with LoRA, "
+                    "uses chat-template prompts with real turn-by-turn verifier feedback, forcing "
+                    "task-specific answers → varied rewards → real GRPO loss signal. "
+                    "Start a new HF Job to see live loss curves replace the baseline data."
                 )
                 reward_plot = gr.Plot(label="4-Panel Training Metrics (Reward Curve + Cumulative + Distribution + Loss)")
                 gr.Markdown("### Recent Episodes")
@@ -1123,6 +1130,21 @@ def build_gradio():
 
             # ── Tab 3: Curriculum ─────────────────────────────────────────
             with gr.TabItem("Curriculum"):
+                gr.Markdown(
+                    "### How to read these charts\n"
+                    "**Heatmap** — Each cell is a _(domain × difficulty tier)_ pair. "
+                    "Color = success rate across all attempts in that cell: "
+                    "🔴 red = 0% (never solved or not yet attempted), "
+                    "🟡 yellow ≈ 50%, 🟢 green = 100% solved.\n\n"
+                    "**Why is everything red at the start?** The curriculum begins with zero data. "
+                    "Until the model has attempted tasks in a given domain/tier, its success rate is 0 → all red. "
+                    "Green cells appear progressively as training runs and tasks get solved.\n\n"
+                    "**Discrimination Zone Coverage** = the fraction of tasks the model solves 20–80% of the time "
+                    "— the ideal difficulty window where learning happens. "
+                    "The coverage graph starts at 0% (red region on chart) and should rise above the "
+                    "70% green dashed target line as the curriculum adapts. "
+                    "If it stays flat near 0%, tasks are either all too easy or all too hard."
+                )
                 curriculum_info = gr.Markdown("_Loading..._")
                 heatmap_plot    = gr.Plot(label="Domain x Tier Success Rates")
                 disc_plot       = gr.Plot(label="Discrimination Zone Coverage Over Time")
@@ -1250,19 +1272,22 @@ def build_gradio():
                 )
                 gr.Markdown("### Submit a Model for Evaluation")
                 gr.Markdown(
-                    "_Enter any HF model ID to run a quick eval against the ALICE environment. "
-                    "Scores are computed from real env episodes + size-based estimation._"
+                    "_Enter any HF model ID to launch a real HF Job that runs RL episodes against "
+                    "the ALICE environment. Scores are pushed to the leaderboard automatically "
+                    "when the job completes. The job URL is returned immediately so you can track progress._"
                 )
                 with gr.Row():
-                    submit_model_id = gr.Textbox(label="HF model ID",
-                                                  value="Qwen/Qwen2.5-0.5B-Instruct",
-                                                  placeholder="e.g. Qwen/Qwen2.5-0.5B-Instruct")
-                    submit_name     = gr.Textbox(label="Display name",
-                                                  value="Qwen2.5-0.5B",
-                                                  placeholder="My Model")
-                    submit_params   = gr.Number(label="Params (B)", value=0.5, precision=1)
-                    submit_btn      = gr.Button("Submit & Eval", variant="primary")
-                submit_status = gr.Textbox(label="Eval Status", interactive=False, lines=3)
+                    submit_model_id  = gr.Textbox(label="HF model ID",
+                                                   value="Qwen/Qwen2.5-0.5B-Instruct",
+                                                   placeholder="e.g. Qwen/Qwen2.5-0.5B-Instruct")
+                    submit_name      = gr.Textbox(label="Display name",
+                                                   value="Qwen2.5-0.5B",
+                                                   placeholder="My Model")
+                    submit_params    = gr.Number(label="Params (B)", value=0.5, precision=1)
+                    submit_episodes  = gr.Number(label="Episodes", value=20, precision=0,
+                                                  info="More episodes = better score estimate (~7 s/ep on a10g-small)")
+                    submit_btn       = gr.Button("Submit & Eval", variant="primary")
+                submit_status = gr.Textbox(label="Eval Status", interactive=False, lines=7)
 
                 def _load_leaderboard():
                     lb      = _get_leaderboard()
@@ -1275,42 +1300,40 @@ def build_gradio():
                     ]
                     return _lb_fig(), rows
 
-                def _submit_model(model_id, display_name, params_b):
+                def _submit_model(model_id, display_name, params_b, episodes):
                     if not model_id.strip():
                         return "❌ Error: HF model ID is required (e.g. HuggingFaceTB/SmolLM2-360M-Instruct)"
                     mid   = model_id.strip()
                     dname = display_name.strip() or mid.split("/")[-1]
                     pb    = float(params_b or 0)
-                    # Register in leaderboard
-                    lb = _get_leaderboard()
-                    lb.submit_model(mid, dname, pb)
-                    # Run eval
+                    eps   = max(1, int(episodes or 20))
+                    eta   = max(1, eps * 7 // 60)
                     try:
-                        avg_r, sr, dc = _eval_submitted_model(mid, dname, pb)
-                        # Refresh leaderboard chart + table inline
-                        entries = lb.get_leaderboard()
+                        job_id, job_url = _launch_eval_job(mid, dname, pb, eps)
                         return (
-                            f"✅ Eval complete!\n"
-                            f"  Model:            {mid}\n"
-                            f"  avg_reward:       {avg_r:.4f}\n"
-                            f"  success_rate:     {sr:.4f}\n"
-                            f"  disc_coverage:    {dc:.4f}\n"
-                            f"  episodes_run:     300\n"
-                            f"  → Added to leaderboard. Click 'Refresh Leaderboard' to see updated rankings."
+                            f"⏳ Eval job submitted to HF Jobs!\n\n"
+                            f"  Model:      {mid}\n"
+                            f"  Episodes:   {eps}\n"
+                            f"  Job ID:     {job_id}\n"
+                            f"  Job URL:    {job_url}\n\n"
+                            f"Results push to the leaderboard automatically when the job completes.\n"
+                            f"Estimated time: ~{eta} min on a10g-small.\n"
+                            f"Click 'Refresh Leaderboard' after the job finishes to see updated rankings."
                         )
                     except Exception as exc:
-                        return f"⚠️ Eval failed: {exc}"
+                        return f"⚠️ Job submission failed: {exc}"
 
                 lb_refresh_btn.click(_load_leaderboard, outputs=[lb_chart, leaderboard_table])
                 submit_btn.click(
                     _submit_model,
-                    inputs=[submit_model_id, submit_name, submit_params],
+                    inputs=[submit_model_id, submit_name, submit_params, submit_episodes],
                     outputs=[submit_status],
                 )
 
         gr.Markdown(
             f"---\n*Auto-refreshes every 3 s. "
-            f"Environment API at `{env_url}` | [Swagger]({env_url}/docs)*"
+            f"Environment API at [{API_URL}]({API_URL}) | "
+            f"[Swagger / API Docs]({API_URL}/docs)*"
         )
 
         timer = gr.Timer(value=3)
