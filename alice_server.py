@@ -1410,9 +1410,36 @@ def refresh_dashboard():
     )
 
 
+def _load_img_html(filename: str, mime: str = "image/jpeg", caption: str = "") -> str:
+    import base64
+    img_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+    path    = os.path.join(img_dir, filename)
+    try:
+        data    = open(path, "rb").read()
+        src     = f"data:{mime};base64," + base64.b64encode(data).decode()
+        cap_html = f'<div style="text-align:center;color:#64748b;font-size:11px;margin-top:4px">{caption}</div>' if caption else ""
+        return (
+            f'<div style="text-align:center;margin:16px 0">'
+            f'<img src="{src}" style="max-width:100%;border-radius:12px;'
+            f'box-shadow:0 4px 24px rgba(0,0,0,0.4);border:1px solid #334155" />'
+            f'{cap_html}</div>'
+        )
+    except Exception as exc:
+        logger.warning("Could not load image %s: %s", filename, exc)
+        return ""
+
+
 def build_gradio():
     port    = int(os.getenv("PORT", "7860"))
     env_url = f"http://localhost:{port}"
+
+    _arch_img_html  = _load_img_html("alice_architecture.png", "image/png",
+                                     "ALICE co-evolutionary architecture")
+    _blog_img_html  = (
+        _load_img_html("hf_blog_1.jpeg", caption="HF Open LLM Leaderboard v2 — intro &amp; motivation")
+        + _load_img_html("hf_blog_2.jpeg", caption="Benchmark saturation: top scores converging on human baseline")
+        + _load_img_html("hf_blog_3.jpeg", caption="Saturation causes: easy tasks, contamination, benchmark errors")
+    )
 
     with gr.Blocks(title="ALICE RL Environment", theme=gr.themes.Soft(), css=_CSS) as demo:
         gr.HTML(header_md)
@@ -1420,10 +1447,11 @@ def build_gradio():
         with gr.Tabs(elem_classes="tab-nav"):
 
             # ── Tab 0: Mission & How It Works ─────────────────────────────
-            with gr.TabItem("&#x1F3AF; Mission"):
+            with gr.TabItem("Mission"):
                 with gr.Accordion("🔴 The Problem: Why Benchmarks Are Broken", open=True):
                     gr.Markdown(_PROBLEM_MD)
                 with gr.Accordion("🏗 Our Solution: ALICE Architecture", open=True):
+                    gr.HTML(_arch_img_html)
                     gr.HTML(_ARCH_HTML)
                     gr.Markdown(
                         "### Why this is new\n"
@@ -1442,6 +1470,7 @@ def build_gradio():
                     )
                 with gr.Accordion("📚 Research Foundation — Papers & Articles", open=False):
                     gr.HTML(_RESEARCH_HTML)
+                    gr.HTML(_blog_img_html)
                 with gr.Accordion("📽 Presentation Slides (ALICE deck)", open=False):
                     gr.HTML("""
                     <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:12px;border:1px solid #334155">
