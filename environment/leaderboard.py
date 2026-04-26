@@ -126,12 +126,19 @@ class Leaderboard:
 
     def _load(self):
         LEADERBOARD_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _bench = {d["model_id"]: d for d in BENCHMARK_MODELS}
         if LEADERBOARD_PATH.exists():
             try:
                 raw = json.loads(LEADERBOARD_PATH.read_text())
                 for d in raw:
+                    mid = d.get("model_id", "")
+                    # If a benchmark model was saved with 0 episodes (stale submit),
+                    # restore the real episode count from the known job results.
+                    if mid in _bench and int(d.get("episodes_run", 0)) == 0:
+                        d["episodes_run"] = _bench[mid]["episodes_run"]
                     e = ModelEntry(**d)
                     self._entries[e.model_id] = e
+                self._save()
                 return
             except Exception:
                 pass
