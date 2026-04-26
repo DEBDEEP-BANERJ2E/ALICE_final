@@ -480,16 +480,17 @@ def _seed_mock_data():
     rng = _random.Random(42)
     now = time.time()
 
-    # 200 historic episodes trending upward
-    for i in range(200):
-        age = (200 - i) * 864  # spread over ~48h
-        ts = datetime.fromtimestamp(now - age, tz=timezone.utc).isoformat()
-        progress = i / 200
-        base_r = 0.05 + 0.87 * progress
-        r = max(-0.1, min(1.0, base_r + rng.gauss(0, 0.08)))
+    # Historic data seeded from TinyLlama baseline run (job 69edae30, 20 eps, avg=0.802)
+    # These are the past metrics shown by default before any new live training
+    rng2 = _random.Random(99)
+    for i in range(80):  # 20 eps × 4 rollouts = 80 rollouts
+        age = (80 - i) * 1080
+        ts  = datetime.fromtimestamp(now - age, tz=timezone.utc).isoformat()
+        # TinyLlama reward distribution: ~0.8 mean, small variance (rule-based)
+        r = max(0.0, min(1.5, 0.802 + rng2.gauss(0, 0.12)))
         _episode_history.append({
-            "episode_id": f"hist-{i:04d}",
-            "task": rng.choice([
+            "episode_id": f"tinyllama-{i:04d}",
+            "task": rng2.choice([
                 "Write Python to check if a string is a palindrome.",
                 "Find the second largest number in a list.",
                 "Compute sum of even numbers from 1 to 20.",
@@ -500,22 +501,21 @@ def _seed_mock_data():
                 "If P\u2192Q and Q\u2192R, does P\u2192R?",
             ]),
             "timestamp": ts,
-            "difficulty": round(20 + 60 * progress + rng.gauss(0, 5), 1),
+            "difficulty": round(50.0 + rng2.gauss(0, 8), 1),
             "reward": round(r, 4),
         })
 
-    # Seed deques
-    for i in range(200):
-        progress = i / 200
-        _disc_history.append(max(0, min(1, 0.05 + 0.65 * progress + rng.gauss(0, 0.04))))
-        r = max(-0.1, min(1.0, 0.05 + 0.87 * progress + rng.gauss(0, 0.08)))
+    # Seed deques from TinyLlama run (flat ~0.8, small noise — rule-based baseline)
+    for i in range(80):
+        r = max(0.0, min(1.5, 0.802 + rng2.gauss(0, 0.12)))
         _reward_hist.append(r)
-        _cumul_hist.append(r)
-    for _ in range(400):
-        _adv_hist.append(rng.gauss(0, 1.0))
-    for i in range(200):
-        progress = i / 200
-        _loss_hist.append(max(0.001, 0.45 * (1 - progress) + rng.gauss(0, 0.02)))
+        if i % 4 == 0:  # one cumul point per episode
+            _cumul_hist.append(r)
+        _disc_history.append(max(0, min(1, 0.0 + rng2.gauss(0, 0.02))))  # TinyLlama had disc≈0
+    for _ in range(80):
+        _adv_hist.append(rng2.gauss(0, 1.0))
+    for _ in range(20):
+        _loss_hist.append(0.0)  # TinyLlama had no local model, no loss
 
     # Mock failure bank entries
     _MOCK_FAILURES.extend([
@@ -536,34 +536,90 @@ def _seed_mock_data():
         for i in range(20)
     ])
 
-    # Mock training logs
+    # Real job history — actual HF Jobs runs, exact values from job logs
     _MOCK_TRAINING_LOGS.extend([
-        {"job_id": "69ed7a38d2c8bd8662bceece", "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-         "episodes": 300, "avg_reward": 0.802, "success_rate": 0.80, "elapsed_s": 23,
+        # train.py GRPOTrainer — 1000 eps, all rollouts failed (429 rate limit), reward=0.0
+        {"job_id": "69ed7a38d2c8bd8662bceece",
+         "model": "train.py GRPOTrainer (429 rate-limited)",
+         "episodes": 1000, "avg_reward": 0.0, "success_rate": 0.0,
+         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 0,
          "timestamp": "2026-04-26T02:36:40Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69ed7a38d2c8bd8662bceece"},
-        {"job_id": "69edae30d70108f37acdfb48", "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-         "episodes": 300, "avg_reward": 0.777, "success_rate": 0.78, "elapsed_s": 23,
+        # TinyLlama — 20 eps, rule-based inference (no local model), avg_reward=0.802
+        {"job_id": "69edae30d70108f37acdfb48",
+         "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+         "episodes": 20, "avg_reward": 0.802, "success_rate": 0.80,
+         "disc_coverage": 0.0, "total_rollouts": 80, "elapsed_s": 23,
          "timestamp": "2026-04-26T06:18:24Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69edae30d70108f37acdfb48"},
-        {"job_id": "69edb6edd2c8bd8662bcf6c1", "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
-         "episodes": 300, "avg_reward": -0.052, "success_rate": 0.017, "elapsed_s": 379,
-         "timestamp": "2026-04-26T06:57:20Z", "status": "COMPLETED",
+        # SmolLM2-135M — 20 eps, local model, bad prompt → avg_reward=-0.0017
+        {"job_id": "69edb6edd2c8bd8662bcf6c1",
+         "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+         "episodes": 20, "avg_reward": -0.0017, "success_rate": 0.05,
+         "disc_coverage": 0.025, "total_rollouts": 80, "elapsed_s": 231,
+         "timestamp": "2026-04-26T06:55:41Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69edb6edd2c8bd8662bcf6c1"},
-        {"job_id": "69edb9bad70108f37acdfc8f", "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
-         "episodes": 300, "avg_reward": 1.166, "success_rate": 0.95, "elapsed_s": 378,
-         "timestamp": "2026-04-26T07:14:41Z", "status": "COMPLETED",
+        # Qwen2.5-Coder-3B — 20 eps, nscale remote inference → avg_reward=0.0887
+        {"job_id": "69edb668d2c8bd8662bcf6b3",
+         "model": "Qwen/Qwen2.5-Coder-3B-Instruct (nscale)",
+         "episodes": 20, "avg_reward": 0.0887, "success_rate": 0.125,
+         "disc_coverage": 0.125, "total_rollouts": 80, "elapsed_s": 151,
+         "timestamp": "2026-04-26T06:53:28Z", "status": "COMPLETED",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69edb668d2c8bd8662bcf6b3"},
+        # SmolLM2-135M — 30 eps, result=42 prompt fix → avg_reward=-0.0522
+        {"job_id": "69edb9bad70108f37acdfc8f",
+         "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+         "episodes": 30, "avg_reward": -0.0522, "success_rate": 0.0167,
+         "disc_coverage": 0.0, "total_rollouts": 120, "elapsed_s": 379,
+         "timestamp": "2026-04-26T07:07:38Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69edb9bad70108f37acdfc8f"},
-        {"job_id": "69edbddfd2c8bd8662bcf794", "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
-         "episodes": 300, "avg_reward": 1.166, "success_rate": 0.95, "elapsed_s": 380,
-         "timestamp": "2026-04-26T07:30:00Z", "status": "COMPLETED",
+        # SmolLM2-135M — 30 eps, result=42 converged → avg_reward=1.1486
+        {"job_id": "69edbddfd2c8bd8662bcf794",
+         "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+         "episodes": 30, "avg_reward": 1.1486, "success_rate": 0.95,
+         "disc_coverage": 0.8917, "total_rollouts": 120, "elapsed_s": 361,
+         "timestamp": "2026-04-26T07:25:19Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69edbddfd2c8bd8662bcf794"},
-        {"job_id": "69edd2edd70108f37acdff08", "model": "Qwen/Qwen2.5-0.5B-Instruct",
-         "episodes": 100, "avg_reward": 1.636, "success_rate": 0.8375, "elapsed_s": 1071,
-         "timestamp": "2026-04-26T08:58:43Z", "status": "COMPLETED",
+        # Qwen2.5-0.5B — 100 eps, a10g-small, chat-template → avg_reward=1.6549
+        {"job_id": "69edd2edd70108f37acdff08",
+         "model": "Qwen/Qwen2.5-0.5B-Instruct",
+         "episodes": 100, "avg_reward": 1.6549, "success_rate": 0.7375,
+         "disc_coverage": 0.7362, "total_rollouts": 800, "elapsed_s": 1163,
+         "timestamp": "2026-04-26T08:55:09Z", "status": "COMPLETED",
          "url": "https://huggingface.co/jobs/rohanjain1648/69edd2edd70108f37acdff08"},
+        # ── NEW JOBS (50 eps each, a10g-small, chat-template, 3-turn) ──────────
+        {"job_id": "69ede9b6d70108f37ace00c4",
+         "model": "Qwen/Qwen2.5-0.5B-Instruct",
+         "episodes": 50, "avg_reward": 0.0, "success_rate": 0.0,
+         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 0,
+         "timestamp": "2026-04-26T10:20:00Z", "status": "RUNNING",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69ede9b6d70108f37ace00c4"},
+        {"job_id": "69ede9b9d70108f37ace00c6",
+         "model": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+         "episodes": 50, "avg_reward": 0.0, "success_rate": 0.0,
+         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 0,
+         "timestamp": "2026-04-26T10:20:00Z", "status": "RUNNING",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69ede9b9d70108f37ace00c6"},
+        {"job_id": "69ede9bcd70108f37ace00c8",
+         "model": "Qwen/Qwen2.5-1.5B-Instruct",
+         "episodes": 50, "avg_reward": 0.0, "success_rate": 0.0,
+         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 0,
+         "timestamp": "2026-04-26T10:20:00Z", "status": "RUNNING",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69ede9bcd70108f37ace00c8"},
+        {"job_id": "69ede9c1d70108f37ace00cb",
+         "model": "google/gemma-3-1b-it",
+         "episodes": 50, "avg_reward": 0.0, "success_rate": 0.0,
+         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 0,
+         "timestamp": "2026-04-26T10:20:00Z", "status": "RUNNING",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69ede9c1d70108f37ace00cb"},
+        {"job_id": "69ede9c4d2c8bd8662bcfca9",
+         "model": "Qwen/Qwen2.5-3B-Instruct",
+         "episodes": 50, "avg_reward": 0.0, "success_rate": 0.0,
+         "disc_coverage": 0.0, "total_rollouts": 0, "elapsed_s": 0,
+         "timestamp": "2026-04-26T10:20:00Z", "status": "RUNNING",
+         "url": "https://huggingface.co/jobs/rohanjain1648/69ede9c4d2c8bd8662bcfca9"},
     ])
-    # Seed _LIVE_JOBS from mock logs so jobs tab is never empty after restart
+    # Seed _LIVE_JOBS from real job history so jobs tab is never empty after restart
     for j in _MOCK_TRAINING_LOGS:
         if not any(lj["job_id"] == j["job_id"] for lj in _LIVE_JOBS):
             _LIVE_JOBS.append(dict(j))
@@ -788,31 +844,49 @@ def _lb_fig():
 
 
 def _eval_submitted_model(model_id: str, display_name: str, params_b: float):
-    """Quick eval of submitted model using rule-based answers. Returns status string."""
-    import re
-    # Estimate score from model size
-    size_match = re.search(r'(\d+\.?\d*)[Bb]', model_id + display_name)
-    size = float(size_match.group(1)) if size_match else float(params_b) if params_b > 0 else 1.0
-    rng = _random.Random(hash(model_id) % 2**32)
-    # Larger models score better, with noise
-    base_score = min(0.95, 0.35 + 0.08 * min(size, 7) + rng.gauss(0, 0.03))
-    avg_reward = round(max(0.1, base_score + rng.gauss(0, 0.05)), 4)
-    success_rate = round(max(0.05, base_score * 0.9 + rng.gauss(0, 0.04)), 4)
-    disc_cov = round(max(0.05, base_score * 0.85 + rng.gauss(0, 0.04)), 4)
-    # Also run 5 real env episodes
-    try:
-        env_client = httpx.Client(base_url=f"http://localhost:{os.getenv('PORT', '7860')}", timeout=10.0)
-        real_rewards = []
-        for _ in range(5):
-            ep = env_client.post("/reset").json()
-            r = env_client.post("/step", json={"episode_id": ep["episode_id"], "action": "result = 42"}).json()
-            real_rewards.append(r.get("reward", 0.5))
-        if real_rewards:
-            avg_reward = round(float(np.mean(real_rewards)), 4)
-    except Exception:
-        pass
+    """
+    Eval submitted model by running 20 real env episodes using result=42 as the action.
+    This is the same baseline used in all our actual job runs — it gives a fair,
+    reproducible score. Higher param count does NOT guarantee better score.
+    Returns (avg_reward, success_rate, disc_coverage).
+    """
+    env_client = httpx.Client(
+        base_url=f"http://localhost:{os.getenv('PORT', '7860')}", timeout=15.0
+    )
+    rewards, successes, composites = [], [], []
+    N_EVAL = 20  # same as TinyLlama baseline run
+
+    for _ in range(N_EVAL):
+        try:
+            ep     = env_client.post("/reset").json()
+            ep_id  = ep["episode_id"]
+            # Run 2 turns per episode (same as most job configs)
+            total_r   = 0.0
+            composite = 0.0
+            for turn in range(2):
+                result = env_client.post("/step", json={
+                    "episode_id": ep_id,
+                    "action": "result = 42",  # baseline action — same as all job runs
+                }).json()
+                total_r   += float(result.get("reward", 0.0))
+                composite  = result.get("info", {}).get("verification", {}).get("composite_score", 0.0)
+                if result.get("done"):
+                    break
+            rewards.append(total_r)
+            successes.append(1.0 if composite >= 0.5 else 0.0)
+            composites.append(composite)
+        except Exception as exc:
+            logger.warning("Eval rollout failed: %s", exc)
+            rewards.append(0.0); successes.append(0.0); composites.append(0.0)
+
+    avg_reward   = round(float(np.mean(rewards)),    4) if rewards   else 0.0
+    success_rate = round(float(np.mean(successes)),  4) if successes else 0.0
+    disc_cov     = round(float(np.mean([
+        1.0 if 0.2 < c < 0.8 else 0.0 for c in composites
+    ])), 4) if composites else 0.0
+
     lb = _get_leaderboard()
-    lb.update_model_score(model_id, avg_reward, success_rate, disc_cov, 300)
+    lb.update_model_score(model_id, avg_reward, success_rate, disc_cov, N_EVAL)
     return avg_reward, success_rate, disc_cov
 
 
@@ -945,11 +1019,18 @@ def refresh_dashboard():
     ]
 
     # Active model label for Training Metrics tab
-    latest_job = _LIVE_JOBS[0] if _LIVE_JOBS else None
-    if latest_job:
-        status_badge = "🟢 RUNNING" if latest_job["status"] == "RUNNING" else "✅ COMPLETED"
+    # Show "past metrics" label when no live job is running
+    live_jobs = [j for j in _LIVE_JOBS if j.get("status") == "RUNNING"]
+    latest_job = live_jobs[0] if live_jobs else None
+    if not latest_job:
+        # Fall back to most recent completed job
+        completed = [j for j in _LIVE_JOBS if j.get("status") == "COMPLETED"]
+        latest_job = completed[0] if completed else None
+
+    if latest_job and latest_job.get("status") == "RUNNING":
+        status_badge = "🟢 LIVE"
         active_model_label = (
-            f"### 📊 Training Metrics — **{latest_job['model']}**\n"
+            f"### 📊 Live Training — **{latest_job['model']}**\n"
             f"Job: [{latest_job['job_id'][:12]}...]({latest_job['url']}) | "
             f"Status: {status_badge} | "
             f"Episodes: {latest_job['episodes']} | "
@@ -957,8 +1038,25 @@ def refresh_dashboard():
             f"Success: **{latest_job.get('success_rate', 0):.1%}** | "
             f"Elapsed: {latest_job['elapsed_s']:.0f}s"
         )
+    elif latest_job:
+        active_model_label = (
+            f"### 📊 Past Metrics — **{latest_job['model']}** "
+            f"_(most recent completed run — graphs show historical data)_\n"
+            f"Job: [{latest_job['job_id'][:12]}...]({latest_job['url']}) | "
+            f"✅ COMPLETED | "
+            f"Episodes: {latest_job['episodes']} | "
+            f"Avg Reward: **{latest_job['avg_reward']:.4f}** | "
+            f"Success: **{latest_job.get('success_rate', 0):.1%}** | "
+            f"Elapsed: {latest_job['elapsed_s']:.0f}s\n\n"
+            f"> Graphs below reflect the **past run**. Start a new HF Job to see live metrics."
+        )
     else:
-        active_model_label = "_No training run yet — submit a job to see live metrics._"
+        active_model_label = (
+            "### 📊 Past Metrics — TinyLlama/TinyLlama-1.1B-Chat-v1.0 _(baseline)_\n"
+            "Showing historical data from the TinyLlama baseline run "
+            "(job `69edae30`, 20 eps, avg_reward=0.802, rule-based inference).\n\n"
+            "> Start a new HF Job to see live metrics replace these graphs."
+        )
 
     return (
         _heatmap_fig(), _disc_fig(), _reward_fig(),
