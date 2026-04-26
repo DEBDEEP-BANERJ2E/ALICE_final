@@ -32,6 +32,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# GPU-only: install with `pip install -e ".[gpu]"` on NVIDIA/AMD hardware
+gpu = [
+    "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",

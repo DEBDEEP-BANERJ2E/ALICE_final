@@ -90,9 +90,23 @@ class CurriculumManager:
         self._log_change("escalation", f"Escalated to difficulty tier {self.difficulty_tier}")
 
     def get_curriculum_heatmap(self) -> np.ndarray:
-        """Return a heatmap array of task difficulty distribution."""
-        # Placeholder: 10×5 grid (difficulty tiers × capability domains)
-        return np.zeros((10, 5), dtype=np.float32)
+        """Return a heatmap array of task difficulty distribution (5 domains × 10 tiers)."""
+        heatmap = np.zeros((5, 10), dtype=np.float32)
+        for task_id, history in self.task_performance.items():
+            if not history:
+                continue
+            sr = float(np.mean(list(history)))
+            # Map task_id hash to a domain row (0-4) and use difficulty_tier as column
+            domain_idx = hash(task_id) % 5
+            tier_idx = min(self.difficulty_tier - 1, 9)
+            heatmap[domain_idx, tier_idx] = max(heatmap[domain_idx, tier_idx], sr)
+        return heatmap
+
+    def detect_plateau(self) -> bool:
+        """Return True if no improvement has occurred in the last 100 episodes."""
+        if len(self._change_log) == 0:
+            return self._episodes_since_escalation >= WINDOW_SIZE
+        return False
 
     def update_task_performance(self, task_id: str, success: bool) -> None:
         """Record a task outcome and update sliding-window metrics."""

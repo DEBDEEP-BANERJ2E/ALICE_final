@@ -22,6 +22,7 @@ from typing import Any, Deque, Dict, Optional
 import psutil
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, field_validator
 
@@ -190,6 +191,25 @@ class HealthResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root() -> HTMLResponse:
+    """Simple HTML status page for HF Spaces iframe."""
+    html = """<!DOCTYPE html>
+<html><head><title>ALICE RL Environment</title>
+<style>body{font-family:monospace;background:#0d1117;color:#e6edf3;padding:2rem}
+a{color:#58a6ff}pre{background:#161b22;padding:1rem;border-radius:6px}</style>
+</head><body>
+<h2>🔬 ALICE RL Environment</h2>
+<p>OpenEnv-compliant RL training environment. API endpoints:</p>
+<pre>POST /reset  — initialize episode
+POST /step   — process action
+GET  /state  — current state
+GET  /health — system health</pre>
+<p><a href="/health">/health</a> · <a href="/state">/state</a> · <a href="/docs">/docs</a></p>
+</body></html>"""
+    return HTMLResponse(content=html)
 
 
 @app.post("/reset", response_model=ResetResponse)

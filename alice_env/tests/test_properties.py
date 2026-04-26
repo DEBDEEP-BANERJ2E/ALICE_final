@@ -679,6 +679,25 @@ class TestOracleInterfaceCaching:
         result = oracle.calibrate_task("divergent task")
         assert result["flagged_for_review"] is True
 
+    def test_cache_expiry_after_30_days(self):
+        from datetime import datetime, timedelta, timezone
+        from environment.oracle_interface import OracleInterface
+        oracle = OracleInterface()
+        oracle._call_reference_model = lambda m, t: 0.5
+
+        # First call - cache miss
+        task_hash = oracle._hash_task("expiry test task")
+        oracle.calibrate_task("expiry test task")
+        
+        # Manually set cache entry to 31 days ago
+        old_timestamp = datetime.now(timezone.utc) - timedelta(days=31)
+        oracle._cache[(task_hash, "primary")] = {"score": 0.5, "timestamp": old_timestamp}
+        oracle._cache[(task_hash, "secondary")] = {"score": 0.5, "timestamp": old_timestamp}
+        
+        # Should return None for expired cache
+        assert oracle.get_cached_score(task_hash, "primary") is None
+        assert oracle.get_cached_score(task_hash, "secondary") is None
+
 
 # ============================================================================
 # Task 11.2: Reward Function property tests
@@ -757,3 +776,426 @@ class TestGRPOTrainer:
         rollouts = [{"reward": r} for r in [0.2, 0.5, 0.8, 0.1, 0.9, 0.3, 0.7, 0.4]]
         adv = trainer._compute_advantages(rollouts)
         assert abs(np.std(adv) - 1.0) < 1e-5
+
+
+# ============================================================================
+# Task 3.1: MDPState — to_vector / from_vector round-trip + encode helpers
+# ============================================================================
+
+class TestMDPState:
+    """Unit tests for MDPState serialization and encoding (Requirements 31.1, 31.5, 33.1)."""
+
+    def test_to_vector_shape(self):
+        from environment.state import MDPState, STATE_DIM
+        s = MDPState()
+        vec = s.to_vector()
+        assert vec.shape == (STATE_DIM,), f"Expected ({STATE_DIM},), got {vec.shape}"
+
+    def test_from_vector_round_trip(self):
+        from environment.state import MDPState
+        import numpy as np
+        s = MDPState(
+            task_embedding=np.ones(768, dtype=np.float32) * 0.5,
+            agent_capability_vector=np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32),
+            difficulty_tier=3,
+            turn_number=2,
+            discrimination_coverage=0.42,
+            cumulative_reward=-0.1,
+        )
+        vec = s.to_vector()
+        s2 = MDPState.from_vector(vec)
+        assert s2.difficulty_tier == s.difficulty_tier
+        assert s2.turn_number == s.turn_number
+        assert abs(s2.discrimination_coverage - s.discrimination_coverage) < 1e-5
+        assert abs(s2.cumulative_reward - s.cumulative_reward) < 1e-5
+        assert np.allclose(s2.task_embedding, s.task_embedding, atol=1e-5)
+        assert np.allclose(s2.agent_capability_vector, s.agent_capability_vector, atol=1e-5)
+
+    def test_from_vector_wrong_size_raises(self):
+        from environment.state import MDPState
+        import numpy as np
+        with pytest.raises(ValueError):
+            MDPState.from_vector(np.zeros(100))
+
+    def test_encode_failure_bank_snapshot_zero_padding(self):
+        from environment.state import MDPState, FAILURE_SNAPSHOT_K, TASK_EMBED_DIM
+        import numpy as np
+        # Provide fewer than K embeddings — rest should be zero-padded
+        embeddings = [np.ones(TASK_EMBED_DIM, dtype=np.float32) for _ in range(3)]
+        snapshot = MDPState.encode_failure_bank_snapshot(embeddings)
+        assert snapshot.shape == (FAILURE_SNAPSHOT_K * TASK_EMBED_DIM,)
+        # First 3 slots filled
+        assert np.all(snapshot[:3 * TASK_EMBED_DIM] == 1.0)
+        # Remaining slots zero-padded
+        assert np.all(snapshot[3 * TASK_EMBED_DIM:] == 0.0)
+
+    def test_encode_failure_bank_snapshot_truncates_to_k(self):
+        from environment.state import MDPState, FAILURE_SNAPSHOT_K, TASK_EMBED_DIM
+        import numpy as np
+        # Provide more than K embeddings — should truncate
+        embeddings = [np.ones(TASK_EMBED_DIM, dtype=np.float32) * i for i in range(FAILURE_SNAPSHOT_K + 5)]
+        snapshot = MDPState.encode_failure_bank_snapshot(embeddings)
+        assert snapshot.shape == (FAILURE_SNAPSHOT_K * TASK_EMBED_DIM,)
+
+    def test_default_state_vector_is_valid(self):
+        from environment.state import MDPState, STATE_DIM
+        s = MDPState()
+        vec = s.to_vector()
+        assert vec.shape == (STATE_DIM,)
+        assert not np.any(np.isnan(vec))
+        assert not np.any(np.isinf(vec))
+
+
+# ============================================================================
+# Task 5.2: Repair mode unit tests
+# ============================================================================
+
+class TestRepairMode:
+    """Unit tests for Task Generator Repair mode (Requirements 4.1–4.7)."""
+
+    def _make_mock_failure_bank(self, num_failures=3):
+        """Create a mock failure bank with synthetic entries."""
+        class MockFailureBank:
+            def get_repair_candidates(self, num_pairs):
+                return [
+                    {
+                        "prompt": f"Solve: x + {i} = 10",
+                        "repair_priority": float(num_pairs - i),
+                        "error_type": "incorrect_output",
+                    }
+                    for i in range(min(num_pairs, num_failures))
+                ]
+        return MockFailureBank()
+
+    def test_repair_mode_returns_list(self):
+        from environment.task_generator import TaskGenerator
+        tg = TaskGenerator()
+        fb = self._make_mock_failure_bank()
+        result = tg.repair_mode(fb, num_pairs=2)
+        assert isinstance(result, list)
+
+    def test_repair_mode_returns_required_keys(self):
+        from environment.task_generator import TaskGenerator
+        tg = TaskGenerator()
+        fb = self._make_mock_failure_bank()
+        result = tg.repair_mode(fb, num_pairs=2)
+        assert len(result) > 0
+        for pair in result:
+            assert "prompt" in pair
+            assert "solution" in pair
+            assert "reasoning" in pair
+            assert "priority_score" in pair
+
+    def test_repair_mode_ordered_by_priority(self):
+        from environment.task_generator import TaskGenerator
+        tg = TaskGenerator()
+        fb = self._make_mock_failure_bank(num_failures=3)
+        result = tg.repair_mode(fb, num_pairs=3)
+        if len(result) >= 2:
+            priorities = [p["priority_score"] for p in result]
+            assert priorities == sorted(priorities, reverse=True)
+
+    def test_repair_mode_solution_non_empty(self):
+        from environment.task_generator import TaskGenerator
+        tg = TaskGenerator()
+        fb = self._make_mock_failure_bank()
+        result = tg.repair_mode(fb, num_pairs=1)
+        for pair in result:
+            assert len(pair["solution"]) > 0
+
+    def test_repair_mode_empty_failure_bank(self):
+        from environment.task_generator import TaskGenerator
+        tg = TaskGenerator()
+
+        class EmptyBank:
+            def get_repair_candidates(self, n):
+                return []
+
+        result = tg.repair_mode(EmptyBank(), num_pairs=5)
+        assert result == []
+
+    def test_strategy_effectiveness_updates(self):
+        from environment.task_generator import TaskGenerator, ADVERSARIAL_STRATEGIES
+        tg = TaskGenerator()
+        strategy = ADVERSARIAL_STRATEGIES[0]
+        initial = tg._strategy_effectiveness[strategy]
+        tg.update_strategy_effectiveness(strategy, success=True)
+        assert tg._strategy_effectiveness[strategy] != initial
+
+    def test_strategy_effectiveness_ema(self):
+        """Effectiveness uses exponential moving average — success increases it."""
+        from environment.task_generator import TaskGenerator, ADVERSARIAL_STRATEGIES
+        tg = TaskGenerator()
+        strategy = ADVERSARIAL_STRATEGIES[0]
+        for _ in range(10):
+            tg.update_strategy_effectiveness(strategy, success=True)
+        assert tg._strategy_effectiveness[strategy] > 0.5
+
+
+# ============================================================================
+# Task 6.1: CurriculumManager additional unit tests
+# ============================================================================
+
+class TestCurriculumManagerMetrics:
+    """Unit tests for CurriculumManager metrics (Requirements 6.1–6.8, 24.1–24.7)."""
+
+    def test_update_task_performance_tracks_attempts(self):
+        from environment.curriculum_manager import CurriculumManager
+        cm = CurriculumManager()
+        cm.update_task_performance("task_a", success=True)
+        cm.update_task_performance("task_a", success=False)
+        assert cm.task_metadata["task_a"]["attempt_count"] == 2
+
+    def test_get_task_success_rate_correct(self):
+        from environment.curriculum_manager import CurriculumManager
+        cm = CurriculumManager()
+        for _ in range(3):
+            cm.update_task_performance("task_b", success=True)
+        for _ in range(1):
+            cm.update_task_performance("task_b", success=False)
+        rate = cm.get_task_success_rate("task_b")
+        assert abs(rate - 0.75) < 1e-6
+
+    def test_get_task_success_rate_unknown_task(self):
+        from environment.curriculum_manager import CurriculumManager
+        cm = CurriculumManager()
+        assert cm.get_task_success_rate("nonexistent") == 0.0
+
+    def test_manual_override_sets_tier(self):
+        from environment.curriculum_manager import CurriculumManager
+        cm = CurriculumManager()
+        cm.set_manual_override(5)
+        assert cm.difficulty_tier == 5
+
+    def test_change_log_records_escalation(self):
+        from environment.curriculum_manager import CurriculumManager
+        cm = CurriculumManager()
+        cm._episodes_since_escalation = 100
+        cm._agent_improvement_score = 0.2
+        cm._benchmark_improvement_score = 0.2
+        cm.escalate()
+        assert len(cm._change_log) == 1
+        assert cm._change_log[0]["type"] == "escalation"
+
+    def test_heatmap_shape(self):
+        from environment.curriculum_manager import CurriculumManager
+        cm = CurriculumManager()
+        hm = cm.get_curriculum_heatmap()
+        assert hm.shape == (5, 10)
+
+    def test_heatmap_populated_after_updates(self):
+        from environment.curriculum_manager import CurriculumManager
+        cm = CurriculumManager()
+        cm.update_task_performance("task_x", success=True)
+        hm = cm.get_curriculum_heatmap()
+        assert hm.sum() > 0.0
+
+    def test_plateau_detected_after_100_episodes(self):
+        from environment.curriculum_manager import CurriculumManager
+        cm = CurriculumManager()
+        cm._episodes_since_escalation = 100
+        assert cm.detect_plateau() is True
+
+    def test_no_plateau_before_100_episodes(self):
+        from environment.curriculum_manager import CurriculumManager
+        cm = CurriculumManager()
+        cm._episodes_since_escalation = 50
+        assert cm.detect_plateau() is False
+
+
+# ============================================================================
+# Task 13.3: Sandbox restriction enforcement unit tests
+# Requirements 16.1–16.9
+# ============================================================================
+
+class TestSandboxRestrictionEnforcement:
+    """Unit tests for sandbox restriction enforcement (Task 13.3)."""
+
+    def _vs(self):
+        from environment.verifier_stack import VerifierStack
+        return VerifierStack()
+
+    def test_open_raises_exception(self):
+        result = self._vs().tier1_verify("result = open('/etc/passwd', 'r')")
+        assert result["success"] is False
+
+    def test_exec_raises_exception(self):
+        result = self._vs().tier1_verify("exec('x=1')")
+        assert result["success"] is False
+
+    def test_eval_raises_exception(self):
+        result = self._vs().tier1_verify("result = eval('1+1')")
+        assert result["success"] is False
+
+    def test_import_raises_exception(self):
+        result = self._vs().tier1_verify("import os; result = os.getcwd()")
+        assert result["success"] is False
+
+    def test_compile_raises_exception(self):
+        result = self._vs().tier1_verify("result = compile('x=1', '<string>', 'exec')")
+        assert result["success"] is False
+
+    def test_timeout_configuration(self):
+        from environment.verifier_stack import SANDBOX_TIMEOUT
+        assert SANDBOX_TIMEOUT == 5
+
+    def test_timeout_enforced_for_infinite_loop(self):
+        result = self._vs().tier1_verify("while True: pass")
+        assert result["success"] is False
+        assert "timed out" in (result.get("error_message") or "").lower()
+
+    def test_memory_limit_configured(self):
+        from environment.verifier_stack import SANDBOX_MEMORY_MB
+        assert SANDBOX_MEMORY_MB == 512
+
+    def test_safe_code_still_passes(self):
+        result = self._vs().tier1_verify("result = 7 * 6")
+        assert result["success"] is True
+        assert result["output"] == 42
+
+    def test_breakpoint_is_blocked(self):
+        result = self._vs().tier1_verify("breakpoint()")
+        assert result["success"] is False
+
+
+# ============================================================================
+# Task 13.1: TrajectorySampler unit tests
+# Requirements 17.1–17.8, 30.1–30.7
+# ============================================================================
+
+class TestTrajectorySampler:
+    """Unit tests for TrajectorySampler (Task 13.1)."""
+
+    def _make_trajectory(self, actions, rewards=None):
+        if rewards is None:
+            rewards = [0.5] * len(actions)
+        turns = [{"action": a, "reward": r} for a, r in zip(actions, rewards)]
+        return {"turns": turns, "metadata": {"episode_id": "test-ep-001"}}
+
+    def test_analyze_clean_trajectory_not_flagged(self):
+        from monitors.trajectory_sampler import TrajectorySampler
+        ts = TrajectorySampler()
+        traj = self._make_trajectory(["action_a", "action_b", "action_c"])
+        result = ts.analyze_trajectory(traj)
+        assert isinstance(result["anomaly_score"], float)
+        assert isinstance(result["flagged"], bool)
+
+    def test_output_repetition_detected(self):
+        from monitors.trajectory_sampler import TrajectorySampler
+        ts = TrajectorySampler(repetition_threshold=0.4)
+        traj = self._make_trajectory(["same"] * 8 + ["diff"])
+        result = ts.analyze_trajectory(traj)
+        assert result["repetition_rate"] > 0.4
+
+    def test_mode_collapse_detected_by_entropy(self):
+        from monitors.trajectory_sampler import TrajectorySampler
+        ts = TrajectorySampler(entropy_threshold=0.5)
+        # All identical actions → entropy = 0 → collapse
+        traj = self._make_trajectory(["same_action"] * 10)
+        result = ts.analyze_trajectory(traj)
+        assert result["trajectory_entropy"] == 0.0
+
+    def test_reward_hacking_detected(self):
+        from monitors.trajectory_sampler import TrajectorySampler
+        ts = TrajectorySampler()
+        traj = self._make_trajectory(["a", "b", "c"], rewards=[0.95, 0.99, 0.98])
+        result = ts.analyze_trajectory(traj)
+        assert result["anomaly_type"] is not None
+
+    def test_anomaly_rate_computed_correctly(self):
+        from monitors.trajectory_sampler import TrajectorySampler
+        ts = TrajectorySampler(repetition_threshold=0.4)
+        for _ in range(5):
+            traj = self._make_trajectory(["x"] * 10)  # definitely anomalous
+            ts.analyze_trajectory(traj)
+        rate = ts.get_anomaly_rate()
+        assert 0.0 <= rate <= 1.0
+
+    def test_compute_trajectory_entropy_uniform(self):
+        from monitors.trajectory_sampler import TrajectorySampler
+        ts = TrajectorySampler()
+        # 4 distinct actions → high entropy
+        entropy = ts.compute_trajectory_entropy(["a", "b", "c", "d"])
+        assert entropy > 0.9
+
+    def test_compute_trajectory_entropy_identical(self):
+        from monitors.trajectory_sampler import TrajectorySampler
+        ts = TrajectorySampler()
+        entropy = ts.compute_trajectory_entropy(["x", "x", "x", "x"])
+        assert entropy == 0.0
+
+    def test_sampled_count_increments(self):
+        from monitors.trajectory_sampler import TrajectorySampler
+        ts = TrajectorySampler()
+        traj = self._make_trajectory(["a", "b"])
+        ts.analyze_trajectory(traj)
+        ts.analyze_trajectory(traj)
+        assert ts._sampled_count == 2
+
+
+# ============================================================================
+# Task 13.2: EntropyMonitor unit tests
+# Requirements 18.1–18.8
+# ============================================================================
+
+class TestEntropyMonitor:
+    """Unit tests for EntropyMonitor (Task 13.2)."""
+
+    def test_record_step_returns_required_keys(self):
+        from monitors.entropy_monitor import EntropyMonitor
+        em = EntropyMonitor()
+        result = em.record_step([0.25, 0.25, 0.25, 0.25])
+        assert "entropy" in result
+        assert "action_diversity" in result
+        assert "collapsed" in result
+        assert "learning_rate" in result
+
+    def test_entropy_is_positive_for_uniform_distribution(self):
+        from monitors.entropy_monitor import EntropyMonitor
+        em = EntropyMonitor()
+        probs = [0.1] * 10
+        entropy = em.compute_policy_entropy(probs)
+        assert entropy > 0.0
+
+    def test_entropy_is_zero_for_degenerate_distribution(self):
+        from monitors.entropy_monitor import EntropyMonitor
+        em = EntropyMonitor()
+        entropy = em.compute_policy_entropy([1.0, 0.0, 0.0])
+        assert entropy == 0.0
+
+    def test_no_collapse_detected_before_window_fills(self):
+        from monitors.entropy_monitor import EntropyMonitor, WINDOW_SIZE
+        em = EntropyMonitor()
+        probs = [0.25, 0.25, 0.25, 0.25]
+        for _ in range(WINDOW_SIZE // 2):
+            em.record_step(probs)
+        assert em.detect_collapse() is False
+
+    def test_collapse_detected_after_entropy_drop(self):
+        from monitors.entropy_monitor import EntropyMonitor, WINDOW_SIZE
+        em = EntropyMonitor()
+        # Fill window with high-entropy steps
+        for _ in range(WINDOW_SIZE):
+            em.record_step([0.25, 0.25, 0.25, 0.25])
+        # Force the internal history to simulate a drop
+        from collections import deque
+        em._entropy_history = deque(
+            [2.0] + [0.0] * (WINDOW_SIZE - 1), maxlen=WINDOW_SIZE
+        )
+        assert em.detect_collapse() is True
+
+    def test_lr_reduced_on_collapse(self):
+        from monitors.entropy_monitor import EntropyMonitor, WINDOW_SIZE, LR_REDUCTION_FACTOR
+        em = EntropyMonitor(initial_learning_rate=1e-4)
+        baseline = em.learning_rate
+        em.adjust_learning_rate(LR_REDUCTION_FACTOR)
+        assert em.learning_rate == pytest.approx(baseline * LR_REDUCTION_FACTOR)
+
+    def test_action_diversity_below_threshold_warns(self, caplog):
+        import logging
+        from monitors.entropy_monitor import EntropyMonitor
+        em = EntropyMonitor()
+        # Degenerate distribution → low diversity
+        with caplog.at_level(logging.WARNING):
+            em.record_step([0.99] + [0.001] * 99)
+        assert any("diversity" in r.message.lower() for r in caplog.records)
