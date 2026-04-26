@@ -341,20 +341,18 @@ class GRPOTrainer:
         return l_total
 
     def _compute_kl_divergence(self) -> float:
-        """Estimate KL(π_θ ‖ π_ref).
-
-        With a real model this computes token-level log-prob differences.
-        Without a loaded model, returns 0.0 (no divergence from initialisation).
-        """
+        """Estimate KL(π_θ ‖ π_ref) using real model log-probs on a fixed probe sentence."""
         if self._model is None or self._ref_model is None:
             return 0.0
         try:
-            import torch  # type: ignore
-            # In production: compute mean KL over a mini-batch of recent actions.
-            # Placeholder: sample a tiny random token distribution and measure divergence.
+            import torch
+            probe = "result = 42"
+            inputs = self._tokenizer(probe, return_tensors="pt", truncation=True, max_length=32)
+            device = next(self._model.parameters()).device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
             with torch.no_grad():
-                logits_theta = torch.randn(1, 10)
-                logits_ref   = torch.randn(1, 10)
+                logits_theta = self._model(**inputs).logits[0, -1]
+                logits_ref   = self._ref_model(**inputs).logits[0, -1]
                 p = torch.softmax(logits_theta, dim=-1)
                 q = torch.softmax(logits_ref,   dim=-1)
                 kl = float(torch.sum(p * (torch.log(p + 1e-8) - torch.log(q + 1e-8))))
