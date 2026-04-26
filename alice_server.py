@@ -807,6 +807,7 @@ def refresh_dashboard():
     turn      = s.get("turn_number", 0)
     ep_id     = (s.get("episode_id") or "")[:8]
     agent_ver = s.get("agent_version", "n/a")
+    agent_ver_label = f"{agent_ver} _(default — no AGENT_MODEL_ID set; used for manual API testing)_" if agent_ver in ("0.0.0", "0.0.0.0") else agent_ver
 
     alerts = []
     if err_rate > 0.1:
@@ -826,7 +827,7 @@ def refresh_dashboard():
     )
     episode_md = (
         f"**Episode:** `{ep_id or 'none'}` | **Turn:** `{turn}` | "
-        f"**Agent:** `{agent_ver}` | **Total:** `{ep_count}`\n\n"
+        f"**Agent:** `{agent_ver_label}` | **Total:** `{ep_count}`\n\n"
         f"**Task:** {task_text[:300]}"
     )
     curriculum_md = (
@@ -968,7 +969,7 @@ def build_gradio():
                     fb_queue_box   = gr.Number(label="Repair Queue",    value=0,   precision=0, interactive=False)
                 with gr.Row():
                     filter_error = gr.Textbox(label="Filter by error_type",    placeholder="e.g. verification_failure")
-                    filter_agent = gr.Textbox(label="Filter by agent_version", placeholder="e.g. 0.0.0")
+                    filter_agent = gr.Textbox(label="Filter by agent_version", placeholder="e.g. 0.0.0 (default/test), SmolLM2-135M")
                     apply_filter = gr.Button("Apply Filter", variant="secondary")
                 failure_table = gr.Dataframe(
                     headers=["failure_id", "error_type", "agent_version", "novelty_score", "timestamp"],
