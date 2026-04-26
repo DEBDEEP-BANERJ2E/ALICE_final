@@ -1,18 +1,17 @@
 """
 Launch ALICE training as a Hugging Face Job.
 
-Usage:
-    python scripts/launch_hf_job.py
-    python scripts/launch_hf_job.py --episodes 50
-    python scripts/launch_hf_job.py --model Qwen/Qwen2.5-Coder-3B-Instruct --episodes 100
+Default: Qwen2.5-0.5B on a10g-small (24 GB VRAM) — no 4-bit needed.
+For larger models use --4bit flag.
 
-Model/provider defaults:
-    model    = Qwen/Qwen2.5-Coder-3B-Instruct  (cheapest: $0.01/M via nscale)
-    provider = nscale
-    flavor   = cpu-basic  (no GPU needed — inference is remote)
+Usage:
+    python scripts/launch_hf_job.py                                    # 0.5B, 100 ep
+    python scripts/launch_hf_job.py --model Qwen/Qwen2.5-1.5B-Instruct --episodes 100
+    python scripts/launch_hf_job.py --model Qwen/Qwen2.5-3B-Instruct --4bit
+    python scripts/launch_hf_job.py --model HuggingFaceTB/SmolLM2-1.7B-Instruct
 """
 from __future__ import annotations
-import argparse, os, sys, time
+import argparse, os, sys
 from pathlib import Path
 
 # Load .env
@@ -33,17 +32,29 @@ if not HF_TOKEN:
 
 
 def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--model",    default="Qwen/Qwen2.5-0.5B-Instruct")
-    p.add_argument("--episodes", type=int, default=100)
-    p.add_argument("--group",    type=int, default=8)
-    p.add_argument("--turns",    type=int, default=3)
+    p = argparse.ArgumentParser(description="Launch ALICE GRPO training on HF Jobs")
+    p.add_argument("--model",    default="Qwen/Qwen2.5-0.5B-Instruct",
+                   help="HF model ID")
+    p.add_argument("--episodes", type=int, default=100,
+                   help="Training episodes (default 100)")
+    p.add_argument("--group",    type=int, default=8,
+                   help="GRPO group size / rollouts per update (default 8)")
+    p.add_argument("--turns",    type=int, default=3,
+                   help="Max turns per episode (default 3)")
+    p.add_argument("--lr",       type=float, default=1e-5)
+    p.add_argument("--lora-r",   type=int, default=16)
     p.add_argument("--4bit",     dest="load_4bit", action="store_true",
-                   help="Enable 4-bit quantisation (GPU only)")
+                   help="Enable 4-bit QLoRA (needed for 7B+ on a10g)")
     p.add_argument("--flavor",   default="a10g-small",
-                   choices=["cpu-basic", "cpu-upgrade", "t4-small", "t4-medium",
-                             "l4x1", "a10g-small", "a10g-large", "l40sx1"])
-    p.add_argument("--no-wait",  action="store_true")
+                   choices=["t4-small", "t4-medium", "l4x1",
+                             "a10g-small", "a10g-large", "l40sx1"],
+                   help="HF Jobs GPU flavor (default a10g-small = 24 GB)")
+    p.add_argument("--push-to-hub", dest="push_to_hub", action="store_true",
+                   help="Push trained LoRA to HF Hub after training")
+    p.add_argument("--hub-repo", default="",
+                   help="HF Hub repo ID for checkpoint push")
+    p.add_argument("--no-wait",  action="store_true",
+                   help="Submit and exit without streaming logs")
     return p.parse_args()
 
 
@@ -53,34 +64,40 @@ def main():
     try:
         from huggingface_hub import run_uv_job, inspect_job, fetch_job_logs
     except ImportError:
-        print("pip install huggingface_hub")
+        print("pip install huggingface_hub>=0.36")
         sys.exit(1)
 
-    # Pre-set namespace to avoid whoami rate-limit call inside run_uv_job
     os.environ["HF_HUB_DISABLE_EXPERIMENTAL_WARNING"] = "1"
-    namespace = HF_SPACE_ID.split("/")[0]  # "rohanjain1648"
-
+    namespace   = HF_SPACE_ID.split("/")[0]
     script_path = str(Path(__file__).parent.parent / "training" / "hf_job_train.py")
 
-    print("=" * 60)
-    print("Submitting ALICE training job")
+    print("=" * 65)
+    print("ALICE Training Job")
     print(f"  Model:    {args.model}")
     print(f"  Episodes: {args.episodes} | Group: {args.group} | Turns: {args.turns}")
-    print(f"  Flavor:   {args.flavor} | 4bit: {args.load_4bit}")
-    print("=" * 60)
+    print(f"  LR: {args.lr} | LoRA r: {args.lora_r} | 4-bit: {args.load_4bit}")
+    print(f"  Flavor:   {args.flavor}  (a10g-small = 24 GB VRAM)")
+    print(f"  Space:    https://{HF_SPACE_ID.replace('/', '-')}.hf.space")
+    print("=" * 65)
+
+    env = {
+        "HF_SPACE_ID":    HF_SPACE_ID,
+        "MODEL_ID":       args.model,
+        "EPISODES":       str(args.episodes),
+        "GROUP_SIZE":     str(args.group),
+        "MAX_TURNS":      str(args.turns),
+        "LR":             str(args.lr),
+        "LORA_R":         str(args.lora_r),
+        "LOAD_IN_4BIT":   "1" if args.load_4bit else "0",
+        "PUSH_TO_HUB":    "1" if args.push_to_hub else "0",
+        "HUB_REPO_ID":    args.hub_repo,
+    }
 
     job = run_uv_job(
         script_path,
         flavor=args.flavor,
         namespace=namespace,
-        env={
-            "HF_SPACE_ID":    HF_SPACE_ID,
-            "MODEL_ID":       args.model,
-            "EPISODES":       str(args.episodes),
-            "GROUP_SIZE":     str(args.group),
-            "MAX_TURNS":      str(args.turns),
-            "LOAD_IN_4BIT":   "1" if args.load_4bit else "0",
-        },
+        env=env,
         secrets={"HF_TOKEN": HF_TOKEN},
         token=HF_TOKEN,
     )
@@ -89,27 +106,28 @@ def main():
     print(f"   Job ID:  {job.id}")
     print(f"   Job URL: {job.url}")
     print(f"   Status:  {job.status.stage}")
-    print(f"   Model:   {args.model} on {args.flavor}")
+    print(f"   Dashboard: https://{HF_SPACE_ID.replace('/', '-')}.hf.space")
 
     if args.no_wait:
-        print(f"\nStream logs: python -c \"from huggingface_hub import fetch_job_logs; "
-              f"[print(l,end='') for l in fetch_job_logs(job_id='{job.id}', token='{HF_TOKEN}')]\"")
+        print(f"\nStream logs:")
+        print(f"  python -c \"from huggingface_hub import fetch_job_logs; "
+              f"[print(l,end='') for l in fetch_job_logs(job_id='{job.id}', "
+              f"token='{HF_TOKEN}')]\"")
         return
 
-    print("\nStreaming logs...\n" + "-" * 60)
+    print("\nStreaming logs (Ctrl+C to stop watching, job continues)...\n" + "-" * 65)
     try:
         for line in fetch_job_logs(job_id=job.id, token=HF_TOKEN):
             print(line, end="", flush=True)
 
         final = inspect_job(job_id=job.id, token=HF_TOKEN)
-        print(f"\n{'=' * 60}")
-        print(f"Job finished: {final.status.stage}")
         space_url = f"https://{HF_SPACE_ID.replace('/', '-')}.hf.space"
+        print(f"\n{'=' * 65}")
+        print(f"Job finished: {final.status.stage}")
         if final.status.stage == "COMPLETED":
-            print(f"✅ Done! Leaderboard: {space_url}/leaderboard")
+            print(f"✅ Leaderboard: {space_url}/leaderboard")
         else:
-            print(f"❌ Failed: {getattr(final.status, 'message', '')}")
-            print(f"   Logs: {final.url}")
+            print(f"❌ Failed. Logs: {final.url}")
             sys.exit(1)
     except KeyboardInterrupt:
         print(f"\nStopped watching. Job still running: {job.url}")
