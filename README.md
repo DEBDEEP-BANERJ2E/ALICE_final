@@ -443,6 +443,51 @@ python training/train_unsloth.py \
 
 ---
 
+## Experiment Tracking
+
+ALICE uses a **built-in, self-hosted tracking system** — no wandb, MLflow, or external service required.
+
+### How it works
+
+Every training script calls two internal endpoints after each episode:
+
+| Endpoint | When | What is logged |
+|---|---|---|
+| `POST /training/push` | Every episode | `rewards`, `advantages`, `loss`, `success_rate`, `disc_coverage`, `cumulative_rewards` |
+| `POST /leaderboard/update` | Every 10 episodes + run end | `avg_reward`, `success_rate`, `disc_coverage`, `episodes_run` |
+
+Metrics are held in memory and flushed to `data/leaderboard.json` for persistence across restarts.
+
+### Where to see the results
+
+Open the **Training Metrics** tab on the live dashboard:
+
+```
+https://rohanjain1648-alice-rl-environment.hf.space
+```
+
+It shows four auto-refreshing panels (updated every 3 s):
+
+- **Reward curve** — per-episode mean reward over time
+- **Cumulative reward** — running total reward
+- **Reward distribution** — histogram of episode rewards
+- **GRPO loss** — policy gradient loss per update
+
+The **Leaderboard** tab shows all models ranked by composite RL score with per-model episode counts, avg reward, success rate, and discrimination coverage.
+
+### Tracked metrics glossary
+
+| Metric | Description |
+|---|---|
+| `avg_reward` | Mean episode reward over the last 80 episodes |
+| `success_rate` | Fraction of episodes with reward > 0.3 |
+| `disc_coverage` | Fraction of tasks in the 20–80% success zone |
+| `loss` | GRPO policy gradient loss (lower = more stable policy) |
+| `advantages` | Group-normalised GRPO advantages for the episode batch |
+| `cumulative_rewards` | Running mean reward — the primary learning curve |
+
+---
+
 ## Colab Notebooks
 
 | Notebook | Hardware | Description |
