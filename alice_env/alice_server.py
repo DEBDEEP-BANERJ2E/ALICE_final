@@ -629,6 +629,263 @@ _MOCK_FAILURES: list = []
 _MOCK_TRAINING_LOGS: list = []
 
 
+# \u2500\u2500 Static content constants \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+_ARCH_HTML = """
+<div style="background:#0f172a;border-radius:16px;padding:24px;color:#f1f5f9;font-family:monospace;font-size:13px;line-height:1.8">
+<div style="text-align:center;font-size:18px;font-weight:800;color:#FF9D00;margin-bottom:20px">ALICE Architecture</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px">
+  <div style="background:#1e293b;border:1px solid #FF9D00;border-radius:10px;padding:14px">
+    <div style="color:#FF9D00;font-weight:700;margin-bottom:6px">\ud83d\udd2e Oracle Interface</div>
+    <div style="color:#94a3b8;font-size:12px">Queries a stronger reference model (GPT-4o / Qwen-72B) to find tasks your model fails but the oracle passes \u2192 <b style="color:#f1f5f9">discrimination zone</b></div>
+  </div>
+  <div style="background:#1e293b;border:1px solid #4a90e2;border-radius:10px;padding:14px">
+    <div style="color:#4a90e2;font-weight:700;margin-bottom:6px">\ud83c\udfaf Curriculum Manager</div>
+    <div style="color:#94a3b8;font-size:12px">Tracks per-task success rates across 5 domains \u00d7 10 tiers. Hunts in the 20-80% zone \u2014 not too easy, not too hard.</div>
+  </div>
+  <div style="background:#1e293b;border:1px solid #10b981;border-radius:10px;padding:14px">
+    <div style="color:#10b981;font-weight:700;margin-bottom:6px">\ud83c\udfe6 Failure Bank</div>
+    <div style="color:#94a3b8;font-size:12px">Stores confirmed failures with sentence-transformer embeddings. k-NN novelty score ensures we never waste an episode on something already known.</div>
+  </div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+  <div style="background:#1e293b;border:1px solid #9b59b6;border-radius:10px;padding:14px">
+    <div style="color:#9b59b6;font-weight:700;margin-bottom:6px">\u2705 Three-Tier Verifier</div>
+    <div style="color:#94a3b8;font-size:12px">
+      <b style="color:#f1f5f9">T1</b> \u2014 RestrictedPython sandbox: did the code run? did it raise?<br>
+      <b style="color:#f1f5f9">T2</b> \u2014 LLM judge (chain-of-thought): is the answer correct in intent?<br>
+      <b style="color:#f1f5f9">T3</b> \u2014 Regression battery: 20 variants, does the fix generalise?
+    </div>
+  </div>
+  <div style="background:#1e293b;border:1px solid #e74c3c;border-radius:10px;padding:14px">
+    <div style="color:#e74c3c;font-weight:700;margin-bottom:6px">\ud83d\udcc8 GRPO Policy Gradient</div>
+    <div style="color:#94a3b8;font-size:12px">
+      Group Relative Policy Optimisation \u2014 normalises rewards within a rollout group \u2192 advantages \u2192 policy update.<br>
+      <b style="color:#f1f5f9">Loss = \u2212(advantage \u00d7 log_prob) + KL_coef \u00d7 log_prob\u00b2</b>
+    </div>
+  </div>
+</div>
+<div style="text-align:center;color:#64748b;font-size:11px;padding-top:8px;border-top:1px solid #1e293b">
+  Co-evolutionary loop: model improves \u2192 oracle discrimination collapses on that task \u2192 curriculum escalates automatically
+</div>
+</div>
+"""
+
+_PROBLEM_MD = """
+## Every model topping a leaderboard today \u2014 it's not as good as it looks.
+
+The benchmarks we use to measure intelligence are **static**. They were written by humans, they're finite, and the moment a model sees enough internet text overlapping with them, the score stops meaning anything. The Hugging Face Open LLM Leaderboard team documented this publicly \u2014 models cluster at the top, the community loses trust, engineers redesign the benchmark by hand, and within months it saturates again. **It's a treadmill with no exit.**
+
+But that's only half the problem.
+
+The other half is that even during training, **we don't know what a model actually can't do**. Standard benchmarks measure known capabilities. They cannot find the blind spots \u2014 the reasoning combinations, the compositional edge cases, the failure modes that exist in the model right now but that no human thought to test. A model can score 87 on MATH and still fail systematically on negation plus arithmetic. Nobody knows. There's no tool to find it.
+
+---
+
+**We built ALICE.** *Adversarial Loop for Inter-model Co-evolutionary Environment.*
+
+ALICE is a reinforcement learning training environment \u2014 OpenEnv-compatible, plug it into any TRL run \u2014 that solves both problems simultaneously through a single co-evolutionary mechanism.
+
+An **Oracle Interface** queries stronger reference models to find the discrimination zone: tasks the reference model passes but your model fails. A **Hunt agent** adversarially searches that zone for novel failure modes. A **Repair agent** synthesises targeted training pairs to fix confirmed failures. A **three-tier Verifier** \u2014 sandboxed programmatic check, chain-of-thought LLM judge, and regression battery \u2014 ensures repairs stick without breaking anything else.
+
+The key insight: **when the repair loop fixes a failure, the Oracle's discrimination reward collapses on that task. It's no longer informative. The benchmark is structurally forced to escalate.** The model improves, the benchmark gets harder, the model improves again. Co-evolutionary, self-sustaining, zero human intervention.
+"""
+
+_RESEARCH_HTML = """
+<style>
+.r-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; padding:8px 0; }
+.r-card { background:#1e293b; border:1px solid #334155; border-radius:10px; padding:16px; transition:border-color 0.2s; }
+.r-card:hover { border-color:#FF9D00; }
+.r-tag { display:inline-block; background:#FF9D0022; color:#FF9D00; font-size:10px; font-weight:700; padding:2px 8px; border-radius:20px; margin-bottom:8px; }
+.r-title { font-size:13px; font-weight:700; color:#f1f5f9; margin-bottom:6px; }
+.r-desc { font-size:11px; color:#94a3b8; line-height:1.5; margin-bottom:10px; }
+.r-link { font-size:11px; color:#4a90e2; text-decoration:none; }
+</style>
+<div class="r-grid">
+  <div class="r-card">
+    <span class="r-tag">BENCHMARK SATURATION</span>
+    <div class="r-title">HF Open LLM Leaderboard v2 \u2014 Why We Redesigned It</div>
+    <div class="r-desc">Documents how MMLU saturated, models clustered at the top, and how even carefully designed benchmarks become gameable within months. The exact treadmill ALICE escapes.</div>
+    <a class="r-link" href="https://huggingface.co/blog/open-llm-leaderboard-v2" target="_blank">\u2192 huggingface.co/blog/open-llm-leaderboard-v2</a>
+  </div>
+  <div class="r-card">
+    <span class="r-tag">POLICY GRADIENT</span>
+    <div class="r-title">GRPO \u2014 Group Relative Policy Optimisation (DeepSeek-R1)</div>
+    <div class="r-desc">The training algorithm powering ALICE. Normalises rewards within a group of rollouts to form advantages \u2014 no value network needed, no PPO clip complexity.</div>
+    <a class="r-link" href="https://arxiv.org/abs/2402.03300" target="_blank">\u2192 arxiv.org/abs/2402.03300</a>
+  </div>
+  <div class="r-card">
+    <span class="r-tag">FOUNDATION</span>
+    <div class="r-title">InstructGPT \u2014 Training Language Models to Follow Instructions (RLHF)</div>
+    <div class="r-desc">The seminal RLHF paper. ALICE extends this: instead of human preference labels, we use co-evolutionary oracle discrimination as the reward signal.</div>
+    <a class="r-link" href="https://arxiv.org/abs/2203.02155" target="_blank">\u2192 arxiv.org/abs/2203.02155</a>
+  </div>
+  <div class="r-card">
+    <span class="r-tag">SELF-PLAY</span>
+    <div class="r-title">SPAG \u2014 Self-Play with Adversarial Grammar</div>
+    <div class="r-desc">Uses self-play where one model generates hard tasks and another solves them. ALICE generalises this to a multi-agent co-evolutionary loop with a verifier stack.</div>
+    <a class="r-link" href="https://arxiv.org/abs/2404.09459" target="_blank">\u2192 arxiv.org/abs/2404.09459</a>
+  </div>
+  <div class="r-card">
+    <span class="r-tag">SAFETY &amp; ALIGNMENT</span>
+    <div class="r-title">Constitutional AI \u2014 Anthropic</div>
+    <div class="r-desc">Uses a set of principles and self-critique to guide RLHF. ALICE borrows the recursive self-improvement loop \u2014 the oracle IS the constitution here.</div>
+    <a class="r-link" href="https://arxiv.org/abs/2212.08073" target="_blank">\u2192 arxiv.org/abs/2212.08073</a>
+  </div>
+  <div class="r-card">
+    <span class="r-tag">DYNAMIC BENCHMARKS</span>
+    <div class="r-title">ARC-AGI \u2014 On the Measure of Intelligence (Chollet)</div>
+    <div class="r-desc">Argues static benchmarks can never measure general intelligence. ARC uses novel tasks never seen in training. ALICE is the RL training companion to this philosophy.</div>
+    <a class="r-link" href="https://arxiv.org/abs/1911.01547" target="_blank">\u2192 arxiv.org/abs/1911.01547</a>
+  </div>
+  <div class="r-card">
+    <span class="r-tag">CURRICULUM LEARNING</span>
+    <div class="r-title">Automatic Curriculum Learning for RL</div>
+    <div class="r-desc">The discrimination zone (20\u201380% success rate window) is ALICE's implementation of curriculum learning \u2014 automatically finding tasks at the model's current frontier.</div>
+    <a class="r-link" href="https://arxiv.org/abs/2003.04664" target="_blank">\u2192 arxiv.org/abs/2003.04664</a>
+  </div>
+  <div class="r-card">
+    <span class="r-tag">TOOLING</span>
+    <div class="r-title">TRL \u2014 Transformer Reinforcement Learning (Hugging Face)</div>
+    <div class="r-desc">The library ALICE runs on top of. GRPO, PPO, DPO all available. ALICE provides the environment; TRL provides the training loop. OpenEnv-compatible by design.</div>
+    <a class="r-link" href="https://huggingface.co/docs/trl" target="_blank">\u2192 huggingface.co/docs/trl</a>
+  </div>
+</div>
+"""
+
+_HOW_TO_USE_MD = """
+### Step-by-step: How to train your model with ALICE
+
+**Option A \u2014 HF Jobs (recommended, GPU)**
+```bash
+# 1. Clone the repo
+git clone https://huggingface.co/spaces/rohanjain1648/alice-rl-environment
+cd alice-rl-environment
+
+# 2. Install the launcher
+pip install huggingface_hub>=0.36
+
+# 3. Launch a training job (default: Qwen2.5-0.5B, 100 episodes, a10g-small)
+python scripts/launch_hf_job.py
+
+# 4. Or specify any model:
+python scripts/launch_hf_job.py --model HuggingFaceTB/SmolLM2-1.7B-Instruct --episodes 50
+
+# 5. Watch metrics appear live in the Training Metrics tab above \u2191
+```
+
+**Option B \u2014 Colab (free T4 GPU)**
+1. Open `notebooks/train_trl_colab.ipynb` in Google Colab (Runtime \u2192 T4 GPU)
+2. Set `ALICE_ENV_URL` in the config cell (default already points here)
+3. Run all cells \u2014 metrics push to this dashboard automatically
+
+**Option C \u2014 Local training**
+```bash
+pip install torch transformers peft trl accelerate bitsandbytes httpx
+ALICE_ENV_URL=https://rohanjain1648-alice-rl-environment.hf.space python training/hf_job_train.py
+```
+
+**Evaluate any model**
+Go to the **Leaderboard** tab \u2192 _Submit a Model for Evaluation_ \u2192 enter a HF model ID and number of episodes \u2192 click Submit. A real HF Job launches, results appear in the leaderboard when done.
+
+**Reading the results**
+- `avg_reward` \u2192 mean reward per turn across all episodes
+- `success_rate` \u2192 fraction of episodes where composite score \u2265 0.5
+- `disc_coverage` \u2192 fraction of tasks in the 20\u201380% discrimination zone
+- `rl_score` = 0.5 \u00d7 avg_reward + 0.3 \u00d7 success_rate + 0.2 \u00d7 disc_coverage
+"""
+
+_PRICING_HTML = """
+<style>
+.pricing-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; max-width:900px; margin:0 auto; padding:20px 0; }
+.tier { border-radius:16px; padding:24px; text-align:center; position:relative; }
+.tier-free { background:#1e293b; border:1px solid #334155; }
+.tier-pro  { background:linear-gradient(135deg,#1a1a2e,#16213e); border:2px solid #FF9D00; }
+.tier-ent  { background:#0f172a; border:1px solid #4a90e2; }
+.tier-badge { position:absolute; top:-12px; left:50%; transform:translateX(-50%); background:#FF9D00; color:#000; font-size:11px; font-weight:800; padding:3px 14px; border-radius:20px; }
+.tier-name { font-size:20px; font-weight:800; margin-bottom:4px; }
+.tier-price { font-size:32px; font-weight:900; margin:12px 0 4px; }
+.tier-sub { font-size:12px; color:#94a3b8; margin-bottom:16px; }
+.tier-features { list-style:none; padding:0; margin:0 0 20px; text-align:left; font-size:13px; }
+.tier-features li { padding:5px 0; border-bottom:1px solid #ffffff0a; color:#cbd5e1; }
+.tier-features li::before { content:"\u2713 "; color:#10b981; font-weight:700; }
+.tier-features li.no::before { content:"\u2717 "; color:#ef4444; }
+.tier-btn { width:100%; padding:10px; border-radius:8px; font-weight:700; cursor:pointer; border:none; font-size:14px; }
+.btn-free { background:#334155; color:#f1f5f9; }
+.btn-pro  { background:#FF9D00; color:#000; }
+.btn-ent  { background:#4a90e2; color:#fff; }
+.credit-box { background:#1e293b; border:1px solid #FF9D00; border-radius:12px; padding:20px; margin:20px auto; max-width:600px; text-align:center; }
+.highlight-box { background:linear-gradient(135deg,#FF9D0015,#FF9D0005); border:2px solid #FF9D00; border-radius:16px; padding:20px; margin:20px 0; }
+</style>
+<div class="highlight-box">
+  <div style="font-size:22px;font-weight:900;color:#FF9D00;margin-bottom:8px">\ud83d\udca1 Business Model</div>
+  <div style="color:#cbd5e1;font-size:14px;line-height:1.7">
+    ALICE is the <b style="color:#f1f5f9">first adversarial RL training environment</b> for LLMs that auto-generates its own benchmarks.
+    Every evaluation run trains the environment to be harder \u2014 the product literally gets better every time a customer uses it.
+    <br><br>Users bring their model and their HF token (or buy ALICE Credits). We orchestrate the GPU, the environment, the verifier stack, and the leaderboard.
+    The leaderboard itself is a <b style="color:#f1f5f9">trust signal</b> \u2014 a score here is harder to game than any static benchmark.
+  </div>
+</div>
+<div class="pricing-grid">
+  <div class="tier tier-free">
+    <div class="tier-name" style="color:#94a3b8">Community</div>
+    <div class="tier-price" style="color:#f1f5f9">Free</div>
+    <div class="tier-sub">Your HF credits, your hardware</div>
+    <ul class="tier-features">
+      <li>Full environment API access</li>
+      <li>Colab + TRL notebooks</li>
+      <li>Public leaderboard listing</li>
+      <li>20-episode quick eval</li>
+      <li class="no">Managed GPU job orchestration</li>
+      <li class="no">Priority eval queue</li>
+      <li class="no">Private leaderboard</li>
+    </ul>
+  </div>
+  <div class="tier tier-pro">
+    <div class="tier-badge">MOST POPULAR</div>
+    <div class="tier-name" style="color:#FF9D00">Pro</div>
+    <div class="tier-price" style="color:#FF9D00">$29<span style="font-size:16px;color:#94a3b8">/mo</span></div>
+    <div class="tier-sub">100 ALICE Credits included</div>
+    <ul class="tier-features">
+      <li>Everything in Community</li>
+      <li>100 ALICE Credits/mo (~100 eval eps on a10g)</li>
+      <li>Managed HF Job submission</li>
+      <li>Priority eval queue</li>
+      <li>Email when eval completes</li>
+      <li class="no">Custom hardware selection</li>
+      <li class="no">Private leaderboard</li>
+    </ul>
+  </div>
+  <div class="tier tier-ent">
+    <div class="tier-name" style="color:#4a90e2">Enterprise</div>
+    <div class="tier-price" style="color:#4a90e2">Custom</div>
+    <div class="tier-sub">Volume credits + SLA</div>
+    <ul class="tier-features">
+      <li>Everything in Pro</li>
+      <li>Custom credit bundles</li>
+      <li>Choose hardware (a10g / A100 / H100)</li>
+      <li>Training time limits & alerts</li>
+      <li>Private leaderboard + API</li>
+      <li>White-label eval reports</li>
+      <li>Dedicated support</li>
+    </ul>
+  </div>
+</div>
+<div class="credit-box">
+  <div style="font-size:16px;font-weight:800;color:#FF9D00;margin-bottom:8px">\ud83e\ude99 ALICE Credits</div>
+  <div style="color:#cbd5e1;font-size:13px;line-height:1.7">
+    1 ALICE Credit = 1 eval episode on a10g-small (~7 sec compute).<br>
+    Credits are pre-purchased, converted to HF GPU compute on-demand.<br>
+    <b style="color:#f1f5f9">Community users</b> can bring their own HF token \u2014 0 credits needed.<br>
+    <b style="color:#f1f5f9">Pro/Enterprise</b> users never touch HF \u2014 we handle compute & billing.
+  </div>
+</div>
+<div style="text-align:center;color:#64748b;font-size:12px;margin-top:16px">
+  \u26a0\ufe0f Pricing is illustrative \u2014 ALICE is currently in open beta.
+  <a href="mailto:rohanjain200461@gmail.com" style="color:#FF9D00">Contact us</a> to join the waitlist or discuss enterprise access.
+</div>
+"""
+
 _CSS = """
 /* \u2500\u2500 ALICE HF-style theme \u2500\u2500 */
 :root {
@@ -843,15 +1100,74 @@ def _lb_fig():
     return fig
 
 
+def _inference_api_eval(model_id: str, display_name: str, params_b: float, episodes: int) -> tuple:
+    """CPU-friendly fallback eval via HF Inference API. No GPU credits needed.
+    Runs up to min(episodes, 15) episodes in-process using the serverless inference API.
+    Returns (avg_reward, success_rate, disc_coverage, summary_str).
+    """
+    hf_token = os.getenv("HF_TOKEN", "")
+    port = int(os.getenv("PORT", "7860"))
+    _SYSTEM = ("You are a precise Python solver. Output ONLY: result = <value>")
+    rewards, successes, composites = [], [], []
+    n = min(episodes, 15)
+
+    for _ in range(n):
+        try:
+            ep      = httpx.post(f"http://localhost:{port}/reset", timeout=15).json()
+            ep_id   = ep["episode_id"]
+            task    = ep["task"]
+            headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
+            resp    = httpx.post(
+                f"https://api-inference.huggingface.co/models/{model_id}/v1/chat/completions",
+                headers=headers, timeout=30,
+                json={"model": model_id, "max_tokens": 64, "temperature": 0.1,
+                      "messages": [{"role": "system", "content": _SYSTEM},
+                                   {"role": "user", "content": f"Task: {task}"}]},
+            ).json()
+            raw    = resp.get("choices", [{}])[0].get("message", {}).get("content", "result = None")
+            action = raw.strip().split("\n")[0]
+            if not action.startswith("result"):
+                action = f"result = {action[:100]}"
+            result = httpx.post(f"http://localhost:{port}/step",
+                                json={"episode_id": ep_id, "action": action}, timeout=15).json()
+            r = float(result.get("reward", 0.0))
+            composite = float(result.get("info", {}).get("verification", {}).get("composite_score", 0.0))
+            rewards.append(r); successes.append(1.0 if composite >= 0.5 else 0.0)
+            composites.append(composite)
+        except Exception as exc:
+            logger.warning("Inference API eval rollout failed: %s", exc)
+            rewards.append(0.0); successes.append(0.0); composites.append(0.0)
+
+    avg_r = round(float(np.mean(rewards)),   4) if rewards   else 0.0
+    sr    = round(float(np.mean(successes)), 4) if successes else 0.0
+    dc    = round(float(np.mean([1.0 if 0.2 < c < 0.8 else 0.0 for c in composites])), 4)
+    _get_leaderboard().update_model_score(model_id, avg_r, sr, dc, len(rewards))
+    summary = (
+        f"✅ CPU eval complete (HF Inference API, {n} episodes)!\n\n"
+        f"  Model:         {model_id}\n"
+        f"  avg_reward:    {avg_r:.4f}\n"
+        f"  success_rate:  {sr:.4f}\n"
+        f"  disc_coverage: {dc:.4f}\n"
+        f"  episodes_run:  {n}\n\n"
+        f"Added to leaderboard. Click 'Refresh Leaderboard' to see rankings.\n"
+        f"Note: CPU eval runs fewer episodes than a full GPU job. "
+        f"For a full eval, add HF credits and resubmit."
+    )
+    return avg_r, sr, dc, summary
+
+
 def _launch_eval_job(model_id: str, display_name: str, params_b: float, episodes: int) -> tuple:
-    """Submit a real HF Job to evaluate the model. Returns (job_id, job_url).
-    The job runs hf_job_train.py which pushes metrics to /training/push and
-    /leaderboard/update when done — leaderboard updates automatically.
+    """Submit a real HF GPU Job to evaluate the model. Returns (job_id, job_url).
+    Falls back to in-process Inference API eval if HF_TOKEN missing or no credits.
     """
     hf_token = os.getenv("HF_TOKEN", "")
     space_id  = os.getenv("HF_SPACE_ID", "rohanjain1648/alice-rl-environment")
+
     if not hf_token:
-        raise RuntimeError("HF_TOKEN not configured in Space secrets")
+        # No token at all — run CPU eval in-process
+        _, _, _, summary = _inference_api_eval(model_id, display_name, params_b, episodes)
+        return "__cpu_eval__", summary
+
     try:
         from huggingface_hub import run_uv_job
     except ImportError:
@@ -860,23 +1176,29 @@ def _launch_eval_job(model_id: str, display_name: str, params_b: float, episodes
     namespace   = space_id.split("/")[0]
     script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "training", "hf_job_train.py")
 
-    job = run_uv_job(
-        script_path,
-        flavor="a10g-small",
-        namespace=namespace,
-        env={
-            "HF_SPACE_ID": space_id,
-            "MODEL_ID":    model_id,
-            "EPISODES":    str(episodes),
-            "GROUP_SIZE":  "4",
-            "MAX_TURNS":   "3",
-            "LR":          "1e-5",
-            "LORA_R":      "16",
-            "LOAD_IN_4BIT": "0",
-        },
-        secrets={"HF_TOKEN": hf_token},
-        token=hf_token,
-    )
+    try:
+        job = run_uv_job(
+            script_path,
+            flavor="a10g-small",
+            namespace=namespace,
+            env={
+                "HF_SPACE_ID": space_id,
+                "MODEL_ID":    model_id,
+                "EPISODES":    str(episodes),
+                "GROUP_SIZE":  "4",
+                "MAX_TURNS":   "3",
+                "LR":          "1e-5",
+                "LORA_R":      "16",
+                "LOAD_IN_4BIT": "0",
+            },
+            secrets={"HF_TOKEN": hf_token},
+            token=hf_token,
+        )
+    except Exception as gpu_err:
+        # GPU job failed (no credits, quota, etc.) — fall back to CPU Inference API eval
+        logger.warning("GPU job failed (%s), falling back to CPU Inference API eval", gpu_err)
+        _, _, _, summary = _inference_api_eval(model_id, display_name, params_b, episodes)
+        return "__cpu_eval__", f"⚠️ GPU job failed ({gpu_err})\n\nFalling back to CPU eval:\n\n{summary}"
 
     lb = _get_leaderboard()
     lb.submit_model(model_id, display_name, params_b)
@@ -1084,6 +1406,44 @@ def build_gradio():
 
         with gr.Tabs(elem_classes="tab-nav"):
 
+            # ── Tab 0: Mission & How It Works ─────────────────────────────
+            with gr.TabItem("🎯 Mission"):
+                with gr.Accordion("🔴 The Problem: Why Benchmarks Are Broken", open=True):
+                    gr.Markdown(_PROBLEM_MD)
+                with gr.Accordion("🏗 Our Solution: ALICE Architecture", open=True):
+                    gr.HTML(_ARCH_HTML)
+                    gr.Markdown(
+                        "### Why this is new\n"
+                        "Every prior approach picks one axis — better prompts, better RLHF labels, "
+                        "harder datasets. ALICE combines all three into a **co-evolutionary loop**: "
+                        "oracle discrimination + curriculum hunt + failure bank + verified repair + "
+                        "GRPO gradient. No static benchmark. No human labelling. No saturation ceiling.\n\n"
+                        "The predecessor strategies that ALICE synthesises:\n"
+                        "| Strategy | What it does | ALICE's version |\n"
+                        "|---|---|---|\n"
+                        "| RLHF (InstructGPT) | Human preference labels | Oracle discrimination reward |\n"
+                        "| Constitutional AI | Self-critique with principles | Verifier stack as constitution |\n"
+                        "| Self-play (SPAG) | Model generates hard tasks | Hunt agent in discrimination zone |\n"
+                        "| Curriculum Learning | Train on tasks at right difficulty | 20-80% success rate zone |\n"
+                        "| Dynamic Benchmarks (ARC) | Novel, unseen tasks | Auto-generated from model's own failures |"
+                    )
+                with gr.Accordion("📚 Research Foundation — Papers & Articles", open=False):
+                    gr.HTML(_RESEARCH_HTML)
+                with gr.Accordion("📽 Presentation Slides (ALICE deck)", open=False):
+                    gr.HTML("""
+                    <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:12px;border:1px solid #334155">
+                      <iframe src="https://gamma.app/embed/xujn28eygymlgda"
+                              style="position:absolute;top:0;left:0;width:100%;height:100%;border:none"
+                              allow="fullscreen" allowfullscreen></iframe>
+                    </div>
+                    <div style="text-align:center;margin-top:8px">
+                      <a href="https://gamma.app/docs/ALICE-Adversarial-Loop-for-Inter-model-Co-evolutionary-Environmen-xujn28eygymlgda"
+                         target="_blank" style="color:#FF9D00;font-size:13px">↗ Open presentation in full screen</a>
+                    </div>
+                    """)
+                with gr.Accordion("🚀 How to Use ALICE — Step by Step", open=False):
+                    gr.Markdown(_HOW_TO_USE_MD)
+
             # ── Tab 1: Overview ──────────────────────────────────────────
             with gr.TabItem("Overview"):
                 with gr.Row():
@@ -1103,6 +1463,19 @@ def build_gradio():
                         episode_md_box = gr.Markdown("_No active episode yet._")
                 alert_box    = gr.Textbox(label="System Alerts", interactive=False, lines=2, value="Loading...")
                 activity_box = gr.Markdown("_Loading activity..._")
+                with gr.Accordion("📚 Optional: RL Concepts in This Tab", open=False):
+                    gr.Markdown(
+                        "**Episode** — one full interaction between the agent (your model) and the environment. "
+                        "Starts with `reset()`, ends when `done=True` or max turns reached.\n\n"
+                        "**Reward** — a scalar signal the environment gives after each action. "
+                        "Positive = good, negative = bad. ALICE's reward = verification score × decay × novelty.\n\n"
+                        "**Agent version** — the model ID set in the `AGENT_MODEL_ID` env var. "
+                        "If it shows `0.0.0` no model is attached — the env is just responding to any client.\n\n"
+                        "**Discrimination coverage** — the fraction of tasks the model gets right 20-80% of the time. "
+                        "This is the 'interesting' zone. Too easy (>80%) = no learning. Too hard (<20%) = no signal.\n\n"
+                        "**Failure Bank** — a memory of confirmed failures, deduplicated by semantic similarity. "
+                        "Prevents the curriculum from re-testing known failures."
+                    )
 
             # ── Tab 2: Training Metrics ───────────────────────────────────
             with gr.TabItem("Training Metrics"):
@@ -1121,6 +1494,25 @@ def build_gradio():
                     "Start a new HF Job to see live loss curves replace the baseline data."
                 )
                 reward_plot = gr.Plot(label="4-Panel Training Metrics (Reward Curve + Cumulative + Distribution + Loss)")
+                with gr.Accordion("📚 Optional: GRPO Math & What Each Chart Means", open=False):
+                    gr.Markdown(
+                        "**GRPO — Group Relative Policy Optimisation**\n\n"
+                        "Standard PPO needs a value network (critic) to estimate expected future reward — expensive. "
+                        "GRPO skips it. For each update step, collect a *group* of G rollouts, compute their rewards "
+                        "{r₁, r₂, ..., rG}, then normalise:\n\n"
+                        "**advantage_i = (r_i − mean(r)) / std(r)**\n\n"
+                        "Then update the policy to increase probability of high-advantage actions:\n\n"
+                        "**Loss = −mean( advantage_i × log_prob(action_i) ) + KL_coef × log_prob²**\n\n"
+                        "The KL term (log_prob²) penalises the policy from moving too far from the reference — "
+                        "without a reference model! It's an implicit KL via the squared log-prob trick.\n\n"
+                        "**Why is advantage sometimes all zeros?** If all rollouts in the group get the same reward "
+                        "(e.g., every model outputs `result = 42`), std(r) = 0, all advantages = 0, "
+                        "loss = 0, gradient = 0. Model stops learning. Fix: use task-specific prompts that "
+                        "produce varied rewards.\n\n"
+                        "**Reward curve** — mean reward per episode. Should trend upward as the model learns.\n"
+                        "**Cumulative reward** — running sum. Linear slope = constant learning. Accelerating = compound improvement.\n"
+                        "**GRPO loss** — should be non-zero and eventually decrease. If stuck at 0 = collapsed advantages."
+                    )
                 gr.Markdown("### Recent Episodes")
                 ep_table = gr.Dataframe(
                     headers=["episode_id", "task", "difficulty", "reward", "timestamp"],
@@ -1130,6 +1522,20 @@ def build_gradio():
 
             # ── Tab 3: Curriculum ─────────────────────────────────────────
             with gr.TabItem("Curriculum"):
+                with gr.Accordion("📚 Optional: Curriculum & Math Behind This Tab", open=False):
+                    gr.Markdown(
+                        "**Curriculum Learning** — the idea of training on tasks ordered from easy → hard, "
+                        "rather than random. ALICE does this automatically by tracking per-task success rates.\n\n"
+                        "**Discrimination Zone** — tasks where the model's success rate is between 20% and 80%. "
+                        "Below 20% = too hard (model just guesses). Above 80% = too easy (no gradient signal). "
+                        "The zone is where Vygotsky's 'zone of proximal development' sits in ML terms.\n\n"
+                        "**Why 20-80%?** A task with p=0.5 maximises variance in the Bernoulli distribution "
+                        "(σ² = p(1-p) = 0.25). More variance → more informative gradients → faster learning.\n\n"
+                        "**Difficulty Tier** — ALICE escalates the tier when disc coverage > 70% for 50+ episodes, "
+                        "meaning the model has 'mastered' the current zone and needs harder tasks.\n\n"
+                        "**Heatmap math**: each cell is `success_rate = successes / attempts` for that domain × tier pair. "
+                        "Initialised to 0 (red) until attempts > 0."
+                    )
                 gr.Markdown(
                     "### How to read these charts\n"
                     "**Heatmap** — Each cell is a _(domain × difficulty tier)_ pair. "
@@ -1151,6 +1557,20 @@ def build_gradio():
 
             # ── Tab 4: HF Space & Jobs ────────────────────────────────────
             with gr.TabItem("HF Space & Jobs"):
+                with gr.Accordion("📚 Optional: What Are HF Jobs?", open=False):
+                    gr.Markdown(
+                        "**HF Jobs** — Hugging Face's serverless GPU compute service. "
+                        "You define a Python script, pick a GPU flavor (T4, a10g, A100), and HF spins up a container, "
+                        "runs it, and tears it down. Pay-per-second, no idle cost.\n\n"
+                        "**Why we use them for training** — ALICE's training script (`hf_job_train.py`) loads a model "
+                        "locally with LoRA, runs GRPO episodes against this Space's API, and streams metrics back in real time. "
+                        "The job doesn't need a persistent server — it's a one-shot run.\n\n"
+                        "**a10g-small** — 24 GB VRAM. Fits up to 3B models without 4-bit quantisation. "
+                        "~7 s/episode for 0.5B, ~25 s/episode for 3B.\n\n"
+                        "**LoRA** — Low-Rank Adaptation. Instead of updating all model weights (billions of floats), "
+                        "LoRA inserts tiny trainable matrices (rank 16) into the attention layers. "
+                        "~99% fewer trainable parameters, same quality. `lora_alpha = 2 × r` is the standard scaling."
+                    )
                 gr.Markdown(
                     "Live status of Hugging Face Spaces and training job history. "
                     "Set `HF_SPACE_ID` and `ALICE_HF_REPO_ID` in Space secrets."
@@ -1208,6 +1628,21 @@ def build_gradio():
 
             # ── Tab 5: Failure Bank ───────────────────────────────────────
             with gr.TabItem("Failure Bank"):
+                with gr.Accordion("📚 Optional: What Is a Failure Bank?", open=False):
+                    gr.Markdown(
+                        "**Failure Bank** — a persistent store of confirmed failure cases. "
+                        "A failure is a (task, action) pair where the verifier assigned composite_score < 0.5.\n\n"
+                        "**Why deduplicate by novelty?** Without deduplication, the curriculum wastes episodes "
+                        "re-testing slight variants of the same failure. The novelty score (0 → 1) measures "
+                        "semantic distance from existing bank entries using sentence-transformer embeddings. "
+                        "Only failures with novelty > 0.7 get added — the rest are discarded as 'already known'.\n\n"
+                        "**k-NN novelty scoring** — for each new failure, compute cosine similarity to the k=16 "
+                        "nearest existing embeddings. Novelty = 1 − max_similarity. "
+                        "High novelty means the failure is genuinely new and worth tracking.\n\n"
+                        "**Repair Queue** — failures staged for targeted fine-tuning. The Repair agent generates "
+                        "training pairs (task, correct_solution) verified by T1+T2+T3, then these are used for SFT "
+                        "before the next GRPO round."
+                    )
                 with gr.Row():
                     fb_total_box   = gr.Number(label="Total Failures",  value=0,   precision=0, interactive=False)
                     fb_novelty_box = gr.Number(label="Avg Novelty",     value=0.0, precision=3, interactive=False)
@@ -1262,6 +1697,20 @@ def build_gradio():
                     "Models ranked by composite RL score "
                     "_(0.5 \u00d7 avg\\_reward + 0.3 \u00d7 success\\_rate + 0.2 \u00d7 disc\\_coverage)_."
                 )
+                with gr.Accordion("📚 Optional: What Do These Scores Mean?", open=False):
+                    gr.Markdown(
+                        "**rl_score** = 0.5 × avg_reward + 0.3 × success_rate + 0.2 × disc_coverage\n\n"
+                        "- `avg_reward` — mean reward per turn. Shaped by correctness + turn-decay + novelty penalty.\n"
+                        "- `success_rate` — fraction of episodes where composite_score ≥ 0.5 "
+                        "(T1 valid Python AND T2 LLM judge agreed it's correct).\n"
+                        "- `disc_coverage` — fraction of tasks where the model sat in the 20–80% zone. "
+                        "A perfect-scoring model has disc_coverage ≈ 0 — too easy for the env to challenge.\n\n"
+                        "**Composite score inside the verifier:**\n"
+                        "`composite = 0.4 × T1_score + 0.4 × T2_score + 0.2 × T3_score`\n\n"
+                        "T1 = RestrictedPython sandbox (did it run, no crash?), "
+                        "T2 = LLM judge (is the answer correct in intent?), "
+                        "T3 = regression battery (does it generalise to 20 variants?)."
+                    )
                 lb_chart = gr.Plot(label="Leaderboard Bar Chart")
                 lb_refresh_btn = gr.Button("Refresh Leaderboard", variant="primary")
                 leaderboard_table = gr.Dataframe(
@@ -1310,6 +1759,9 @@ def build_gradio():
                     eta   = max(1, eps * 7 // 60)
                     try:
                         job_id, job_url = _launch_eval_job(mid, dname, pb, eps)
+                        if job_id == "__cpu_eval__":
+                            # CPU fallback — job_url contains the full status message
+                            return job_url
                         return (
                             f"⏳ Eval job submitted to HF Jobs!\n\n"
                             f"  Model:      {mid}\n"
@@ -1329,6 +1781,25 @@ def build_gradio():
                     inputs=[submit_model_id, submit_name, submit_params, submit_episodes],
                     outputs=[submit_status],
                 )
+
+            # ── Tab 7: Pro Access / Pricing ──────────────────────────────
+            with gr.TabItem("💎 Pro Access"):
+                gr.HTML(_PRICING_HTML)
+                gr.Markdown("### 💬 Get in Touch")
+                with gr.Row():
+                    contact_name  = gr.Textbox(label="Name", placeholder="Your name")
+                    contact_email = gr.Textbox(label="Email", placeholder="your@email.com")
+                contact_msg = gr.Textbox(label="Message", placeholder="Tell us about your use case — model size, episodes, custom hardware needs...", lines=3)
+                contact_btn = gr.Button("Send Message", variant="primary")
+                contact_out = gr.Textbox(label="Status", interactive=False)
+
+                def _send_contact(name, email, msg):
+                    if not email.strip() or not msg.strip():
+                        return "⚠️ Please fill in email and message."
+                    logger.info("Pro contact: %s <%s> — %s", name, email, msg[:100])
+                    return f"✅ Thanks {name or 'there'}! We'll reach out to {email} within 24 hours."
+
+                contact_btn.click(_send_contact, inputs=[contact_name, contact_email, contact_msg], outputs=[contact_out])
 
         gr.Markdown(
             f"---\n*Auto-refreshes every 3 s. "
