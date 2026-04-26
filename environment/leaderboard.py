@@ -126,24 +126,19 @@ class Leaderboard:
 
     def _load(self):
         LEADERBOARD_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _benchmark_defaults = {d["model_id"]: d for d in BENCHMARK_MODELS}
-        # Always seed benchmarks first so episodes_run is never 0
-        for d in BENCHMARK_MODELS:
-            self._entries[d["model_id"]] = ModelEntry(**d)
-        # Merge persisted data on top, but keep the higher episodes_run for benchmarks
         if LEADERBOARD_PATH.exists():
             try:
                 raw = json.loads(LEADERBOARD_PATH.read_text())
                 for d in raw:
-                    mid = d.get("model_id", "")
-                    if mid in _benchmark_defaults:
-                        d["episodes_run"] = max(
-                            int(d.get("episodes_run", 0)),
-                            _benchmark_defaults[mid]["episodes_run"],
-                        )
-                    self._entries[mid] = ModelEntry(**d)
+                    e = ModelEntry(**d)
+                    self._entries[e.model_id] = e
+                return
             except Exception:
                 pass
+        # No valid JSON — seed from benchmark defaults (real training results)
+        for d in BENCHMARK_MODELS:
+            e = ModelEntry(**d)
+            self._entries[e.model_id] = e
         self._save()
 
     def _save(self):
