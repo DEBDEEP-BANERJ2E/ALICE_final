@@ -35,11 +35,11 @@ Built on top of **[OpenEnv](https://github.com/meta-pytorch/OpenEnv)** and deplo
 
 Static benchmarks saturate. Once a model solves most of a fixed test set, scores cluster near the ceiling and stop measuring real capability differences.
 
-![HF Open LLM Leaderboard v2 — intro and motivation](images/hf_blog_1.jpeg)
+![HF Open LLM Leaderboard v2 — intro and motivation](https://raw.githubusercontent.com/DEBDEEP-BANERJ2E/ALICE_final/main/images/hf_blog_1.jpeg)
 
-![Benchmark saturation: top scores converging on human baseline](images/hf_blog_2.jpeg)
+![Benchmark saturation: top scores converging on human baseline](https://raw.githubusercontent.com/DEBDEEP-BANERJ2E/ALICE_final/main/images/hf_blog_2.jpeg)
 
-![Saturation causes: easy tasks, contamination, benchmark errors](images/hf_blog_3.jpeg)
+![Saturation causes: easy tasks, contamination, benchmark errors](https://raw.githubusercontent.com/DEBDEEP-BANERJ2E/ALICE_final/main/images/hf_blog_3.jpeg)
 
 ALICE sidesteps saturation by generating tasks **adversarially** — always targeting the model's discrimination zone (tasks it gets right 20–80% of the time). There is no ceiling because the environment co-evolves with the model.
 
@@ -55,7 +55,7 @@ ALICE sidesteps saturation by generating tasks **adversarially** — always targ
 
 ## Architecture
 
-![ALICE co-evolutionary architecture](images/alice_architecture.png)
+![ALICE co-evolutionary architecture](https://raw.githubusercontent.com/DEBDEEP-BANERJ2E/ALICE_final/main/images/alice_architecture.png)
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
