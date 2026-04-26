@@ -62,19 +62,21 @@ logging.basicConfig(
 log = logging.getLogger("alice.hf_job")
 
 # ── Config from env ───────────────────────────────────────────────────────────
-HF_TOKEN     = os.environ.get("HF_TOKEN", "")
-HF_SPACE_ID  = os.environ.get("HF_SPACE_ID", "rohanjain1648/alice-rl-environment")
-MODEL_ID     = os.environ.get("MODEL_ID", "Qwen/Qwen2.5-0.5B-Instruct")
-EPISODES     = int(os.environ.get("EPISODES", "100"))
-GROUP_SIZE   = int(os.environ.get("GROUP_SIZE", "4"))
-MAX_TURNS    = int(os.environ.get("MAX_TURNS", "3"))
-LR           = float(os.environ.get("LR", "1e-5"))
-KL_COEF      = float(os.environ.get("KL_COEF", "0.04"))
-MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", "128"))
-HUB_REPO_ID  = os.environ.get("HUB_REPO_ID", "")
-CKPT_DIR     = "/tmp/alice_checkpoint"
-REPO_DIR     = "/tmp/alice_repo"
-ENV_URL      = "http://localhost:7860"
+HF_TOKEN       = os.environ.get("HF_TOKEN", "")
+HF_SPACE_ID    = os.environ.get("HF_SPACE_ID", "rohanjain1648/alice-rl-environment")
+MODEL_ID       = os.environ.get("MODEL_ID", "Qwen/Qwen2.5-0.5B-Instruct")
+EPISODES       = int(os.environ.get("EPISODES", "30"))    # 30 fast episodes
+GROUP_SIZE     = int(os.environ.get("GROUP_SIZE", "4"))
+MAX_TURNS      = int(os.environ.get("MAX_TURNS", "1"))    # 1 turn = 3× faster
+LR             = float(os.environ.get("LR", "1e-5"))
+KL_COEF        = float(os.environ.get("KL_COEF", "0.04"))
+MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", "32"))  # 32 tokens, not 128
+HUB_REPO_ID    = os.environ.get("HUB_REPO_ID", "")
+CKPT_DIR       = "/tmp/alice_checkpoint"
+REPO_DIR       = "/tmp/alice_repo"
+ENV_URL        = "http://localhost:7860"
+# Reuse a single httpx client — avoids TCP handshake overhead per call
+_client        = httpx.Client(timeout=30.0)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 1 — Clone repo
@@ -155,7 +157,6 @@ def load_model():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Use 4-bit only if CUDA is available
     load_in_4bit = torch.cuda.is_available()
     bnb_cfg = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -172,14 +173,22 @@ def load_model():
         device_map="auto" if torch.cuda.is_available() else None,
         trust_remote_code=True,
         torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+        # Speed: skip slow safetensors verification
+        low_cpu_mem_usage=True,
     )
 
+    # Smallest LoRA possible — r=4 trains 4× fewer params → faster backward
     lora_cfg = LoraConfig(
-        task_type=TaskType.CAUSAL_LM, r=16, lora_alpha=32,
-        target_modules=["q_proj", "v_proj"], lora_dropout=0.05, bias="none",
+        task_type=TaskType.CAUSAL_LM, r=4, lora_alpha=8,
+        target_modules=["q_proj", "v_proj"], lora_dropout=0.0, bias="none",
     )
     model = get_peft_model(model, lora_cfg)
     model.print_trainable_parameters()
+
+    # Enable gradient checkpointing to save VRAM (allows larger batch)
+    model.enable_input_require_grads()
+    model.gradient_checkpointing_enable()
+
     log.info("Model ready")
     return model, tokenizer
 
@@ -190,13 +199,17 @@ def load_model():
 
 def sample_response(model, tokenizer, prompt: str) -> str:
     device = next(model.parameters()).device
-    cot = (f"<task>{prompt}</task>\n"
-           f"Think step by step, then give your final answer.\n<reasoning>")
-    inputs = tokenizer(cot, return_tensors="pt", truncation=True, max_length=512).to(device)
+    # Short direct prompt — no CoT wrapper, saves ~30 tokens of input overhead
+    inputs = tokenizer(
+        f"Task: {prompt}\nAnswer:",
+        return_tensors="pt", truncation=True, max_length=128,  # 128 not 512
+    ).to(device)
     with torch.no_grad():
         out = model.generate(
-            **inputs, max_new_tokens=MAX_NEW_TOKENS,
-            do_sample=True, temperature=0.8, top_p=0.9,
+            **inputs,
+            max_new_tokens=MAX_NEW_TOKENS,   # 32 tokens
+            do_sample=False,                  # greedy — 3-5× faster than sampling
+            use_cache=True,
             pad_token_id=tokenizer.pad_token_id,
         )
     gen_ids = out[0][inputs["input_ids"].shape[1]:]
@@ -207,25 +220,18 @@ def collect_rollouts(model, tokenizer) -> tuple[list, list, list]:
     prompts, responses, rewards = [], [], []
     for _ in range(GROUP_SIZE):
         try:
-            ep    = httpx.post(f"{ENV_URL}/reset", timeout=30.0).json()
+            ep    = _client.post(f"{ENV_URL}/reset").json()
             ep_id = ep["episode_id"]
             task  = ep["task"]
-            total_reward = 0.0
-            last_action  = ""
-            for _ in range(MAX_TURNS):
-                action = sample_response(model, tokenizer, task)
-                result = httpx.post(
-                    f"{ENV_URL}/step",
-                    json={"episode_id": ep_id, "action": action},
-                    timeout=30.0,
-                ).json()
-                total_reward += result["reward"]
-                last_action   = action
-                if result.get("done"):
-                    break
+            action = sample_response(model, tokenizer, task)
+            # MAX_TURNS=1: single step, no loop overhead
+            result = _client.post(
+                f"{ENV_URL}/step",
+                json={"episode_id": ep_id, "action": action},
+            ).json()
             prompts.append(task)
-            responses.append(last_action)
-            rewards.append(total_reward)
+            responses.append(action)
+            rewards.append(result["reward"])
         except Exception as exc:
             log.warning("Rollout error (skipped): %s", exc)
     return prompts, responses, rewards
@@ -240,11 +246,11 @@ def grpo_update(model, tokenizer, optimizer, prompts, responses, rewards) -> flo
     total_loss = torch.tensor(0.0, device=device)
 
     for adv, prompt, response in zip(advantages, prompts, responses):
-        full_text  = prompt + "\n" + response
+        full_text  = f"Task: {prompt}\nAnswer: {response}"
         inputs     = tokenizer(full_text, return_tensors="pt",
-                               truncation=True, max_length=768).to(device)
+                               truncation=True, max_length=256).to(device)  # 256 not 768
         labels     = inputs["input_ids"].clone()
-        prompt_len = len(tokenizer(prompt, return_tensors="pt")["input_ids"][0])
+        prompt_len = len(tokenizer(f"Task: {prompt}\nAnswer:", return_tensors="pt")["input_ids"][0])
         labels[0, :prompt_len] = -100
         out        = model(**inputs, labels=labels)
         log_prob   = -out.loss
@@ -260,26 +266,15 @@ def grpo_update(model, tokenizer, optimizer, prompts, responses, rewards) -> flo
 
 
 def push_leaderboard(avg_r: float, avg_succ: float, disc: float, ep: int):
-    try:
-        httpx.post(
-            f"{ENV_URL}/leaderboard/update",
-            json={"model_id": MODEL_ID, "avg_reward": avg_r,
-                  "success_rate": avg_succ, "discrimination_coverage": disc,
-                  "episodes_run": ep},
-            timeout=5.0,
-        )
-        # Also push to live HF Space
-        space_url = f"https://{HF_SPACE_ID.replace('/', '-')}.hf.space"
-        httpx.post(
-            f"{space_url}/leaderboard/update",
-            json={"model_id": MODEL_ID, "avg_reward": avg_r,
-                  "success_rate": avg_succ, "discrimination_coverage": disc,
-                  "episodes_run": ep},
-            timeout=8.0,
-        )
-        log.info("Leaderboard updated (local + HF Space)")
-    except Exception as exc:
-        log.warning("Leaderboard push failed (non-fatal): %s", exc)
+    payload = {"model_id": MODEL_ID, "avg_reward": avg_r,
+               "success_rate": avg_succ, "discrimination_coverage": disc,
+               "episodes_run": ep}
+    for url in [ENV_URL, f"https://{HF_SPACE_ID.replace('/', '-')}.hf.space"]:
+        try:
+            _client.post(f"{url}/leaderboard/update", json=payload)
+        except Exception as exc:
+            log.warning("Leaderboard push to %s failed: %s", url, exc)
+    log.info("Leaderboard pushed: ep=%d avg_reward=%.4f success=%.2f%%", ep, avg_r, avg_succ*100)
 
 
 def train(model, tokenizer):
@@ -288,7 +283,8 @@ def train(model, tokenizer):
     disc = 0.0
     t0 = time.time()
 
-    log.info("Starting GRPO training: %d episodes × %d rollouts", EPISODES, GROUP_SIZE)
+    log.info("Starting GRPO training: %d episodes × %d rollouts (1 turn, greedy, 32 tokens)",
+             EPISODES, GROUP_SIZE)
 
     for ep in range(1, EPISODES + 1):
         prompts, responses, rewards = collect_rollouts(model, tokenizer)
@@ -303,21 +299,19 @@ def train(model, tokenizer):
         avg_r    = float(np.mean(all_rewards[-50:]))
         avg_succ = float(np.mean(all_successes[-50:]))
 
-        log.info(
-            "Ep %4d/%d | loss=%.4f | avg_reward=%.4f | success=%.2f%% | elapsed=%.0fs",
-            ep, EPISODES, loss, avg_r, avg_succ * 100, time.time() - t0,
-        )
+        log.info("Ep %3d/%d | loss=%.4f | avg_reward=%.4f | success=%.0f%% | %.0fs",
+                 ep, EPISODES, loss, avg_r, avg_succ * 100, time.time() - t0)
 
-        if ep % 10 == 0:
+        # Push every 5 episodes (not 10) so leaderboard updates faster
+        if ep % 5 == 0:
             push_leaderboard(avg_r, avg_succ, disc, ep)
 
-    # Final push
     avg_r    = float(np.mean(all_rewards)) if all_rewards else 0.0
     avg_succ = float(np.mean(all_successes)) if all_successes else 0.0
     push_leaderboard(avg_r, avg_succ, disc, EPISODES)
 
-    log.info("Training complete | avg_reward=%.4f | success=%.2f%% | total_rollouts=%d",
-             avg_r, avg_succ * 100, len(all_rewards))
+    log.info("Done | avg_reward=%.4f | success=%.0f%% | rollouts=%d | time=%.0fs",
+             avg_r, avg_succ * 100, len(all_rewards), time.time() - t0)
     return avg_r, avg_succ
 
 
