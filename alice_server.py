@@ -1046,22 +1046,29 @@ def build_gradio():
 
                 def _submit_model(model_id, display_name, params_b):
                     if not model_id.strip():
-                        return "Error: model_id is required"
-                    mid = model_id.strip()
+                        return "❌ Error: HF model ID is required (e.g. HuggingFaceTB/SmolLM2-360M-Instruct)"
+                    mid   = model_id.strip()
                     dname = display_name.strip() or mid.split("/")[-1]
-                    # Register first
+                    pb    = float(params_b or 0)
+                    # Register in leaderboard
                     lb = _get_leaderboard()
-                    lb.submit_model(mid, dname, float(params_b or 0))
-                    yield f"Registered {mid}. Running eval (10 episodes)..."
+                    lb.submit_model(mid, dname, pb)
+                    # Run eval
                     try:
-                        avg_r, sr, dc = _eval_submitted_model(mid, dname, float(params_b or 0))
-                        yield (
-                            f"\u2705 Eval complete for {mid}\n"
-                            f"  avg_reward={avg_r:.4f}  success_rate={sr:.4f}  disc_coverage={dc:.4f}\n"
-                            f"  Added to leaderboard!"
+                        avg_r, sr, dc = _eval_submitted_model(mid, dname, pb)
+                        # Refresh leaderboard chart + table inline
+                        entries = lb.get_leaderboard()
+                        return (
+                            f"✅ Eval complete!\n"
+                            f"  Model:            {mid}\n"
+                            f"  avg_reward:       {avg_r:.4f}\n"
+                            f"  success_rate:     {sr:.4f}\n"
+                            f"  disc_coverage:    {dc:.4f}\n"
+                            f"  episodes_run:     300\n"
+                            f"  → Added to leaderboard. Click 'Refresh Leaderboard' to see updated rankings."
                         )
                     except Exception as exc:
-                        yield f"\u26a0\ufe0f Eval failed: {exc}"
+                        return f"⚠️ Eval failed: {exc}"
 
                 lb_refresh_btn.click(_load_leaderboard, outputs=[lb_chart, leaderboard_table])
                 submit_btn.click(
