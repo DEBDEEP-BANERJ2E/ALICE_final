@@ -165,7 +165,6 @@ ALICE_ENV_URL=http://localhost:7860 python training/train_trl.py --model_id Qwen
 | Variable | Default | Description |
 |---|---|---|
 | `ALICE_ENV_URL` | `http://localhost:7860` | ALICE server URL |
-| `OPENAI_API_KEY` | — | OpenAI key for T2 LLM judge |
 | `HF_TOKEN` | — | HF write token for checkpoint push |
 | `HF_SPACE_ID` | — | `username/space-name` for HF Space link |
 | `ALICE_HF_REPO_ID` | — | Training Space ID for HF Jobs tab |
