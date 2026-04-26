@@ -1162,15 +1162,85 @@ def _inference_api_eval(model_id: str, display_name: str, params_b: float, episo
     return avg_r, sr, dc, summary
 
 
+def _launch_training_job() -> str:
+    """Launch a free-tier HF Job (cpu-basic) for Qwen2.5-0.5B, 50 episodes.
+    Returns a status string shown in the Training Metrics tab.
+    Falls back to in-process Inference API eval if HF_TOKEN is missing.
+    """
+    model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+    episodes = 50
+    hf_token = os.getenv("HF_TOKEN", "")
+    space_id = os.getenv("HF_SPACE_ID", "rohanjain1648/alice-rl-environment")
+    namespace = space_id.split("/")[0]
+    jobs_page = f"https://huggingface.co/jobs/{namespace}"
+
+    if not hf_token:
+        return (
+            "⚠️ HF_TOKEN not set — cannot submit a real HF Job.\n\n"
+            "Set HF_TOKEN in your Space secrets and restart to enable one-click training.\n"
+            "Live metrics will appear in the charts once a job is running."
+        )
+
+    try:
+        from huggingface_hub import run_uv_job
+    except ImportError:
+        return "❌ huggingface_hub>=0.36 required. Update the Space dependencies."
+
+    script_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "training", "hf_cpu_job.py"
+    )
+
+    try:
+        job = run_uv_job(
+            script_path,
+            flavor="cpu-basic",
+            namespace=namespace,
+            env={
+                "HF_SPACE_ID": space_id,
+                "MODEL_ID":    model_id,
+                "EPISODES":    str(episodes),
+                "MAX_TURNS":   "3",
+            },
+            secrets={"HF_TOKEN": hf_token},
+            token=hf_token,
+        )
+        job_url = job.url or f"{jobs_page}/{job.id}"
+        _LIVE_JOBS.insert(0, {
+            "job_id": job.id, "model": model_id, "episodes": episodes,
+            "avg_reward": 0.0, "success_rate": 0.0, "elapsed_s": 0.0,
+            "status": "RUNNING", "url": job_url,
+            "timestamp": datetime.now(timezone.utc).isoformat()[:19] + "Z",
+        })
+        if len(_LIVE_JOBS) > 20:
+            _LIVE_JOBS.pop()
+        return (
+            f"✅ Training job submitted!\n\n"
+            f"  Model:     {model_id}\n"
+            f"  Episodes:  {episodes}\n"
+            f"  Hardware:  cpu-basic (free tier — no credits needed)\n"
+            f"  Job ID:    {job.id}\n"
+            f"  Job URL:   {job_url}\n\n"
+            f"Live metrics update in the charts above as each episode completes.\n"
+            f"Open the Job URL to view logs. Leaderboard updates automatically when done."
+        )
+    except Exception as exc:
+        err = str(exc)
+        logger.warning("cpu-basic training job failed: %s", err)
+        return (
+            f"⚠️ Could not submit HF Job: {err}\n\n"
+            f"You can still run eval via the Leaderboard → Submit form.\n"
+            f"View all your jobs at: {jobs_page}"
+        )
+
+
 def _launch_eval_job(model_id: str, display_name: str, params_b: float, episodes: int) -> tuple:
-    """Submit a real HF GPU Job to evaluate the model. Returns (job_id, job_url).
-    Falls back to in-process Inference API eval if HF_TOKEN missing or no credits.
+    """Submit a free-tier HF Job (cpu-basic) to evaluate the model. Returns (job_id, job_url).
+    Falls back to in-process Inference API eval if HF_TOKEN missing or job submission fails.
     """
     hf_token = os.getenv("HF_TOKEN", "")
     space_id  = os.getenv("HF_SPACE_ID", "rohanjain1648/alice-rl-environment")
 
     if not hf_token:
-        # No token at all — run CPU eval in-process
         _, _, _, summary = _inference_api_eval(model_id, display_name, params_b, episodes)
         return "__cpu_eval__", summary
 
@@ -1180,52 +1250,44 @@ def _launch_eval_job(model_id: str, display_name: str, params_b: float, episodes
         raise RuntimeError("huggingface_hub>=0.36 required")
 
     namespace   = space_id.split("/")[0]
-    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "training", "hf_job_train.py")
+    script_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "training", "hf_cpu_job.py"
+    )
 
     try:
         job = run_uv_job(
             script_path,
-            flavor="a10g-small",
+            flavor="cpu-basic",
             namespace=namespace,
             env={
                 "HF_SPACE_ID": space_id,
                 "MODEL_ID":    model_id,
                 "EPISODES":    str(episodes),
-                "GROUP_SIZE":  "4",
                 "MAX_TURNS":   "3",
-                "LR":          "1e-5",
-                "LORA_R":      "16",
-                "LOAD_IN_4BIT": "0",
             },
             secrets={"HF_TOKEN": hf_token},
             token=hf_token,
         )
-    except Exception as gpu_err:
-        # GPU job failed (no credits / 402 / quota) — fall back to free CPU Inference API eval
-        err_str = str(gpu_err)
-        is_402  = "402" in err_str or "Payment Required" in err_str or "insufficient" in err_str.lower()
-        if is_402:
-            reason = "No HF Job credits (402 Payment Required). Running free CPU eval instead."
-        else:
-            reason = f"GPU job error: {err_str}"
-        logger.warning("GPU job failed (%s), falling back to CPU Inference API eval", err_str)
+    except Exception as err:
+        err_str = str(err)
+        logger.warning("HF Job submission failed (%s), falling back to Inference API eval", err_str)
         _, _, _, cpu_summary = _inference_api_eval(model_id, display_name, params_b, episodes)
-        header = f"ℹ️ {reason}\n\n"
-        return "__cpu_eval__", header + cpu_summary
+        return "__cpu_eval__", f"ℹ️ Job submission failed: {err_str}\n\n{cpu_summary}"
 
     lb = _get_leaderboard()
     lb.submit_model(model_id, display_name, params_b)
 
+    job_url = job.url or f"https://huggingface.co/jobs/{namespace}/{job.id}"
     _LIVE_JOBS.insert(0, {
         "job_id": job.id, "model": model_id, "episodes": episodes,
         "avg_reward": 0.0, "success_rate": 0.0, "elapsed_s": 0.0,
-        "status": "RUNNING", "url": job.url,
+        "status": "RUNNING", "url": job_url,
         "timestamp": datetime.now(timezone.utc).isoformat()[:19] + "Z",
     })
     if len(_LIVE_JOBS) > 20:
         _LIVE_JOBS.pop()
 
-    return job.id, job.url
+    return job.id, job_url
 
 
 def refresh_dashboard():
@@ -1522,18 +1584,16 @@ def build_gradio():
             # ── Tab 2: Training Metrics ───────────────────────────────────
             with gr.TabItem("Training Metrics"):
                 active_model_md = gr.Markdown("_No training run yet — start a job to see live metrics._")
-                reward_curve_note = gr.Markdown(
-                    "> ⚠️ **Why does the reward curve look flat?** "
-                    "The baseline (TinyLlama) converged to `result = 42` — always valid Python → "
-                    "reward ≈ 0.8 every episode → no variance → GRPO advantages all zero → "
-                    "no gradient signal → model stops learning.  \n"
-                    "> **Why is GRPO loss = 0.0 in the default data?** TinyLlama ran as "
-                    "rule-based inference on the server — no local model was loaded, so "
-                    "no forward/backward pass happened and there was no gradient loss to compute.  \n"
-                    "> **Fix:** The updated `hf_job_train.py` loads the model locally with LoRA, "
-                    "uses chat-template prompts with real turn-by-turn verifier feedback, forcing "
-                    "task-specific answers → varied rewards → real GRPO loss signal. "
-                    "Start a new HF Job to see live loss curves replace the baseline data."
+                with gr.Row():
+                    start_training_btn = gr.Button(
+                        "▶ Start Training  (Qwen2.5-0.5B · 50 episodes · cpu-basic free tier)",
+                        variant="primary",
+                    )
+                training_job_status = gr.Textbox(
+                    label="Training Job Status",
+                    interactive=False,
+                    lines=5,
+                    placeholder="Click above to submit a free-tier HF Job and see live training metrics...",
                 )
                 reward_plot = gr.Plot(label="4-Panel Training Metrics (Reward Curve + Cumulative + Distribution + Loss)")
                 with gr.Accordion("📚 Optional: GRPO Math & What Each Chart Means", open=False):
@@ -1776,7 +1836,7 @@ def build_gradio():
                                                    placeholder="My Model")
                     submit_params    = gr.Number(label="Params (B)", value=0.5, precision=1)
                     submit_episodes  = gr.Number(label="Episodes", value=20, precision=0,
-                                                  info="More episodes = better score estimate (~7 s/ep on a10g-small)")
+                                                  info="More episodes = better score estimate (cpu-basic free tier via HF Inference API)")
                     submit_btn       = gr.Button("Submit & Eval", variant="primary")
                 submit_status = gr.Textbox(label="Eval Status", interactive=False, lines=7)
 
@@ -1798,7 +1858,6 @@ def build_gradio():
                     dname = display_name.strip() or mid.split("/")[-1]
                     pb    = float(params_b or 0)
                     eps   = max(1, int(episodes or 20))
-                    eta   = max(1, eps * 7 // 60)
                     try:
                         job_id, job_url = _launch_eval_job(mid, dname, pb, eps)
                         if job_id == "__cpu_eval__":
@@ -1808,10 +1867,10 @@ def build_gradio():
                             f"⏳ Eval job submitted to HF Jobs!\n\n"
                             f"  Model:      {mid}\n"
                             f"  Episodes:   {eps}\n"
+                            f"  Hardware:   cpu-basic (free tier)\n"
                             f"  Job ID:     {job_id}\n"
                             f"  Job URL:    {job_url}\n\n"
                             f"Results push to the leaderboard automatically when the job completes.\n"
-                            f"Estimated time: ~{eta} min on a10g-small.\n"
                             f"Click 'Refresh Leaderboard' after the job finishes to see updated rankings."
                         )
                     except Exception as exc:
@@ -1823,6 +1882,8 @@ def build_gradio():
                     inputs=[submit_model_id, submit_name, submit_params, submit_episodes],
                     outputs=[submit_status],
                 )
+                # Auto-refresh leaderboard after submit completes
+                submit_btn.click(_load_leaderboard, outputs=[lb_chart, leaderboard_table])
 
             # ── Tab 7: Pro Access / Pricing ──────────────────────────────
             with gr.TabItem("💎 Pro Access"):
@@ -1842,6 +1903,12 @@ def build_gradio():
                     return f"✅ Thanks {name or 'there'}! We'll reach out to {email} within 24 hours."
 
                 contact_btn.click(_send_contact, inputs=[contact_name, contact_email, contact_msg], outputs=[contact_out])
+
+        # ── Training Metrics: Start Training button ───────────────────────
+        start_training_btn.click(
+            _launch_training_job,
+            outputs=[training_job_status],
+        )
 
         gr.Markdown(
             f"---\n*Auto-refreshes every 3 s. "
