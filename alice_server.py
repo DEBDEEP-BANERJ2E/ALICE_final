@@ -565,24 +565,21 @@ def _hf_space_url(space_id: str) -> str:
 
 def _hf_space_info() -> dict:
     """Query HF API for Space runtime status for env and training spaces."""
-    env_sid   = os.getenv("HF_SPACE_ID", "")
-    train_sid = os.getenv("ALICE_HF_REPO_ID", "")
+    env_sid   = os.getenv("HF_SPACE_ID", "rohanjain1648/alice-rl-environment")
+    train_sid = os.getenv("ALICE_HF_REPO_ID", "rohanjain1648/alice-rl-environment")
     hf_token  = os.getenv("HF_TOKEN", "")
     headers   = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
     result: dict = {}
     for key, sid in [("env_space", env_sid), ("training_space", train_sid)]:
-        if not sid:
-            result[key] = {"status": "not configured", "url": "", "id": ""}
-            continue
         try:
             r = httpx.get(f"https://huggingface.co/api/spaces/{sid}", headers=headers, timeout=5.0)
             if r.status_code == 200:
                 stage = r.json().get("runtime", {}).get("stage", "UNKNOWN")
                 result[key] = {"status": stage, "url": _hf_space_url(sid), "id": sid}
             else:
-                result[key] = {"status": f"HTTP {r.status_code}", "url": "", "id": sid}
+                result[key] = {"status": f"HTTP {r.status_code}", "url": _hf_space_url(sid), "id": sid}
         except Exception as exc:
-            result[key] = {"status": "error", "url": "", "id": sid, "err": str(exc)}
+            result[key] = {"status": "error", "url": _hf_space_url(sid), "id": sid, "err": str(exc)}
     return result
 
 
@@ -951,10 +948,9 @@ def build_gradio():
                     for key, label in [("env_space", "Environment Space"),
                                        ("training_space", "Training Space")]:
                         v      = info.get(key, {})
-                        sid    = v.get("id") or os.getenv(
-                            "HF_SPACE_ID" if key == "env_space" else "ALICE_HF_REPO_ID", "_not set_")
+                        sid    = v.get("id", "rohanjain1648/alice-rl-environment")
                         status = v.get("status", "n/a")
-                        url    = v.get("url", "")
+                        url    = v.get("url", _hf_space_url(sid))
                         stage  = _STAGE_LABEL.get(status, "building")
                         badge  = "\U0001f7e2" if stage == "running" else "\U0001f534"
                         lines.append(f"{badge} **{label}** `{sid}` \u2014 **{status}**")
