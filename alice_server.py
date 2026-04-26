@@ -1099,12 +1099,14 @@ def _inference_api_eval(model_id: str, display_name: str, params_b: float, episo
     """CPU-friendly fallback eval via HF Inference API. No GPU credits needed.
     Runs up to min(episodes, 15) episodes in-process using the serverless inference API.
     Returns (avg_reward, success_rate, disc_coverage, summary_str).
+    Only updates the leaderboard if at least one episode actually completed.
     """
     hf_token = os.getenv("HF_TOKEN", "")
     port = int(os.getenv("PORT", "7860"))
     _SYSTEM = ("You are a precise Python solver. Output ONLY: result = <value>")
     rewards, successes, composites = [], [], []
     n = min(episodes, 15)
+    n_completed = 0   # episodes that actually got a model response + env step
 
     for _ in range(n):
         try:
@@ -1129,24 +1131,33 @@ def _inference_api_eval(model_id: str, display_name: str, params_b: float, episo
             composite = float(result.get("info", {}).get("verification", {}).get("composite_score", 0.0))
             rewards.append(r); successes.append(1.0 if composite >= 0.5 else 0.0)
             composites.append(composite)
+            n_completed += 1
         except Exception as exc:
             logger.warning("Inference API eval rollout failed: %s", exc)
-            rewards.append(0.0); successes.append(0.0); composites.append(0.0)
 
-    avg_r = round(float(np.mean(rewards)),   4) if rewards   else 0.0
-    sr    = round(float(np.mean(successes)), 4) if successes else 0.0
+    if n_completed == 0:
+        return 0.0, 0.0, 0.0, (
+            f"❌ CPU eval failed for `{model_id}`.\n\n"
+            f"The HF Inference API could not be reached or the model is not available "
+            f"on the free serverless tier. Try a smaller model (e.g. Qwen/Qwen2.5-0.5B-Instruct) "
+            f"or check that the model ID is correct.\n\n"
+            f"Model was NOT added to the leaderboard."
+        )
+
+    avg_r = round(float(np.mean(rewards)),   4)
+    sr    = round(float(np.mean(successes)), 4)
     dc    = round(float(np.mean([1.0 if 0.2 < c < 0.8 else 0.0 for c in composites])), 4)
-    _get_leaderboard().update_model_score(model_id, avg_r, sr, dc, len(rewards))
+    _get_leaderboard().update_model_score(model_id, avg_r, sr, dc, n_completed)
     summary = (
-        f"✅ CPU eval complete (HF Inference API, {n} episodes)!\n\n"
+        f"✅ CPU eval complete (HF Inference API, {n_completed}/{n} episodes)!\n\n"
         f"  Model:         {model_id}\n"
         f"  avg_reward:    {avg_r:.4f}\n"
         f"  success_rate:  {sr:.4f}\n"
         f"  disc_coverage: {dc:.4f}\n"
-        f"  episodes_run:  {n}\n\n"
+        f"  episodes_run:  {n_completed}\n\n"
         f"Added to leaderboard. Click 'Refresh Leaderboard' to see rankings.\n"
-        f"Note: CPU eval runs fewer episodes than a full GPU job. "
-        f"For a full eval, add HF credits and resubmit."
+        f"Note: CPU eval runs up to 15 episodes via the free HF Inference API (no credits needed). "
+        f"For a full eval, add HF Job credits and resubmit."
     )
     return avg_r, sr, dc, summary
 
@@ -1190,10 +1201,17 @@ def _launch_eval_job(model_id: str, display_name: str, params_b: float, episodes
             token=hf_token,
         )
     except Exception as gpu_err:
-        # GPU job failed (no credits, quota, etc.) — fall back to CPU Inference API eval
-        logger.warning("GPU job failed (%s), falling back to CPU Inference API eval", gpu_err)
-        _, _, _, summary = _inference_api_eval(model_id, display_name, params_b, episodes)
-        return "__cpu_eval__", f"⚠️ GPU job failed ({gpu_err})\n\nFalling back to CPU eval:\n\n{summary}"
+        # GPU job failed (no credits / 402 / quota) — fall back to free CPU Inference API eval
+        err_str = str(gpu_err)
+        is_402  = "402" in err_str or "Payment Required" in err_str or "insufficient" in err_str.lower()
+        if is_402:
+            reason = "No HF Job credits (402 Payment Required). Running free CPU eval instead."
+        else:
+            reason = f"GPU job error: {err_str}"
+        logger.warning("GPU job failed (%s), falling back to CPU Inference API eval", err_str)
+        _, _, _, cpu_summary = _inference_api_eval(model_id, display_name, params_b, episodes)
+        header = f"ℹ️ {reason}\n\n"
+        return "__cpu_eval__", header + cpu_summary
 
     lb = _get_leaderboard()
     lb.submit_model(model_id, display_name, params_b)
