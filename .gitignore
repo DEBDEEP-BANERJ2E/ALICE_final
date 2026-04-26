@@ -1,0 +1,76 @@
+# Environment secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# uv / virtualenv
+.venv/
+venv/
+env/
+.uv/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# Type checking
+.mypy_cache/
+.ruff_cache/
+
+# Model weights and checkpoints (large files)
+*.bin
+*.safetensors
+*.pt
+*.pth
+checkpoints/
+runs/
+
+# Failure bank data (can be large)
+data/failure_bank/
+data/trajectories/
+data/regression_battery/
+
+# Gradio temp files
+gradio_cached_examples/
+flagged/
+
+# HF cache
+~/.cache/huggingface/
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Docker
+.dockerignore
+
+.kiro/
