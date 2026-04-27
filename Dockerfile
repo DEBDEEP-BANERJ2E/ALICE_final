@@ -28,7 +28,7 @@ RUN uv venv /app/.venv && \
 RUN VIRTUAL_ENV=/app/.venv uv pip install --no-cache \
         "torch>=2.1.0" \
         "transformers>=4.40.0" \
-        "trl>=0.8.0" \
+        "trl>=0.11.0" \
         "accelerate>=0.26.0" \
     && VIRTUAL_ENV=/app/.venv uv pip install --no-cache \
         "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" \

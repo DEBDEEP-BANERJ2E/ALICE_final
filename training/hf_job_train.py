@@ -3,7 +3,7 @@
 # dependencies = [
 #   "httpx", "numpy", "matplotlib>=3.8.0",
 #   "torch>=2.2.0", "transformers>=4.40.0", "peft>=0.10.0",
-#   "accelerate>=0.27.0", "trl>=0.8.6", "datasets>=2.18.0",
+#   "accelerate>=0.27.0", "trl>=0.11.0", "datasets>=2.18.0",
 #   "bitsandbytes>=0.43.0",
 # ]
 # ///
