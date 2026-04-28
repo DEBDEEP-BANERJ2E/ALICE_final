@@ -1,0 +1,67 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openenv-alice_env"
+version = "0.1.0"
+description = "Alice Env environment for OpenEnv"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core[core]>=0.2.2",
+    "numpy>=1.26.0",
+    "openai>=1.0.0",
+    "httpx>=0.24.0",
+    "psutil>=5.9.0",
+    "python-dotenv>=1.0.0",
+    "RestrictedPython>=7.0",
+    "sentence-transformers>=2.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "gradio>=4.0.0",
+    "torch>=2.1.0",
+    "transformers>=4.40.0",
+    "trl>=0.8.0",
+    "matplotlib>=3.7.0",
+]
+
+[project.optional-dependencies]
+# GPU-only: install with `pip install -e ".[gpu]"` on NVIDIA/AMD hardware
+gpu = [
+    "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "httpx>=0.24.0",
+]
+
+[project.scripts]
+server = "alice_env.server.app:main"
+
+[tool.uv.scripts]
+serve = "uvicorn server:app --host 0.0.0.0 --port 7860 --workers 1"
+train = "python training/train.py"
+dashboard = "python dashboard/gradio_app.py"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["alice_env", "alice_env.server"]
+package-dir = { "alice_env" = ".", "alice_env.server" = "server" }
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "psutil>=7.2.2",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "python-dotenv>=1.2.2",
+    "restrictedpython>=8.1",
+]

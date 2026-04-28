@@ -1,0 +1,25 @@
+Metadata-Version: 2.4
+Name: openenv-alice_env
+Version: 0.1.0
+Summary: Alice Env environment for OpenEnv
+Requires-Python: >=3.10
+Requires-Dist: openenv-core[core]>=0.2.2
+Requires-Dist: numpy>=1.26.0
+Requires-Dist: openai>=1.0.0
+Requires-Dist: httpx>=0.24.0
+Requires-Dist: psutil>=5.9.0
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: RestrictedPython>=7.0
+Requires-Dist: sentence-transformers>=2.0.0
+Requires-Dist: fastapi>=0.100.0
+Requires-Dist: uvicorn>=0.20.0
+Requires-Dist: gradio>=4.0.0
+Requires-Dist: torch>=2.1.0
+Requires-Dist: transformers>=4.40.0
+Requires-Dist: trl>=0.8.0
+Requires-Dist: matplotlib>=3.7.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+Requires-Dist: httpx>=0.24.0; extra == "dev"
