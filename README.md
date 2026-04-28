@@ -102,6 +102,7 @@ ALICE sidesteps saturation by generating tasks **adversarially** — always targ
 | **Leaderboard API** | https://rohanjain1648-alice-rl-environment.hf.space/leaderboard |
 | **HF Space** | https://huggingface.co/spaces/rohanjain1648/alice-rl-environment |
 | **HF Jobs Dashboard** | https://huggingface.co/settings/jobs |
+| **Blog — How ALICE Works** | [BLOG.md](BLOG.md) |
 
 ---
 
