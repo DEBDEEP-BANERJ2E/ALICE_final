@@ -23,7 +23,7 @@ secrets:
 [![OpenEnv](https://img.shields.io/badge/OpenEnv-compatible-orange)](https://github.com/meta-pytorch/OpenEnv)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green)](LICENSE)
 
-> 📖 **[Read the full technical deep-dive →](BLOG.md)**
+> 📖 BLOG: **[Read the full technical deep-dive →](BLOG.md)**
 
 ---
 
