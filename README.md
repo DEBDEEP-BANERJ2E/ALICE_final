@@ -581,6 +581,8 @@ rl_score = 0.5 × avg_reward + 0.3 × success_rate + 0.2 × disc_coverage
 
 **Via the Dashboard** — open the Leaderboard tab, enter your model ID, and click Submit & Eval. A free-tier HF Job is submitted automatically; results appear in the table when the job completes.
 
+> **Note:** Submitting models requires HF credits. Even free-tier jobs consume credits from your Hugging Face account balance.
+
 **Via API:**
 ```python
 import httpx
