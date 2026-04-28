@@ -23,6 +23,8 @@ secrets:
 [![OpenEnv](https://img.shields.io/badge/OpenEnv-compatible-orange)](https://github.com/meta-pytorch/OpenEnv)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green)](LICENSE)
 
+> 📖 **[Read the full technical deep-dive →](BLOG.md)**
+
 ---
 
 **ALICE is a closed-loop, adversarial RL training environment for LLMs.** It implements a continuous **hunt → verify → repair → escalate** cycle: the environment generates tasks that sit just at the frontier of the model's capability, grades responses through a three-tier verifier, banks novel failures, and escalates difficulty as the model improves — all without any human labels or static datasets.
