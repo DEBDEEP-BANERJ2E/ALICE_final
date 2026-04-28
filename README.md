@@ -59,6 +59,8 @@ ALICE sidesteps saturation by generating tasks **adversarially** — always targ
 
 ![ALICE co-evolutionary architecture](https://raw.githubusercontent.com/DEBDEEP-BANERJ2E/ALICE_final/main/images/alice_architecture.png)
 
+> Note: Model names shown in the architecture diagram (Qwen-72B, GPT-4o) are illustrative examples. Actual reference models used are configurable via environment variables.
+
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                       ALICE RL Environment                       │
