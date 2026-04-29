@@ -25,7 +25,7 @@ secrets:
 
 > 📖 BLOG: **[Read the full technical deep-dive →](BLOG.md)**
 > 
-> 🎥 VIDEO: **[Watch the demonstration on YouTube →](https://youtu.be/tzdpa_x810A?si=CkyZg4r831HthVvk)**
+> 🎥 VIDEO: **[Watch the demonstration on YouTube →](https://youtu.be/FtDLaHnS9C)**
 
 ---
 
@@ -109,7 +109,7 @@ ALICE sidesteps saturation by generating tasks **adversarially** — always targ
 | **HF Space** | https://huggingface.co/spaces/rohanjain1648/alice-rl-environment |
 | **HF Jobs Dashboard** | https://huggingface.co/settings/jobs |
 | **Blog — How ALICE Works** | [BLOG.md](BLOG.md) |
-| **Video Demonstration** | [YouTube](https://youtu.be/tzdpa_x810A?si=CkyZg4r831HthVvk) |
+| **Video Demonstration** | [YouTube](https://youtu.be/FtDLaHnS9C) |
 
 ---
 
