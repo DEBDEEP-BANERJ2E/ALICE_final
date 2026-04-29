@@ -24,6 +24,8 @@ secrets:
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green)](LICENSE)
 
 > 📖 BLOG: **[Read the full technical deep-dive →](BLOG.md)**
+> 
+> 🎥 VIDEO: **[Watch the demonstration on YouTube →](https://youtu.be/tzdpa_x810A?si=CkyZg4r831HthVvk)**
 
 ---
 
